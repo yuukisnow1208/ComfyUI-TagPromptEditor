@@ -425,8 +425,25 @@ function renderChips(st) {
 
   renderToolbar(st);
   renderWarn(st);
+  // 标签集合一变，下面预设网格的「已加入」高亮必须跟着变 ——
+  // 删除 / 编辑改名 / 去重 / 清空 都只走 renderChips，不会走 renderGrid，
+  // 少了这一步就会出现「上面删了、下面方格还是选中的」。
+  syncGridSelection(st);
   reanchorBar(st);
   syncHeight(st);
+}
+
+/** 只翻转卡片的「已加入」高亮，不重建 DOM。
+ *  重建（grid.innerHTML = ""）会把网格的滚动位置清零，用户翻到第 8 屏点一张卡
+ *  就被弹回顶部，所以这里必须做增量更新而不是重渲染。 */
+function syncGridSelection(st) {
+  const grid = st.gridEl;
+  if (!grid) return;
+  const used = new Set(st.tags.map((t) => t.t.toLowerCase()));
+  for (const card of grid.querySelectorAll(".tpe-card")) {
+    const key = card.dataset.tag;
+    if (key) card.classList.toggle("tpe-added", used.has(key));
+  }
 }
 
 /** 重渲染标签块后，把还开着的工具条重新贴回原来那个标签块上。
@@ -883,7 +900,9 @@ function renderGrid(st) {
   for (const item of st.items) {
     const card = document.createElement("button");
     card.className = "tpe-card";
-    if (used.has(item.t.toLowerCase())) card.classList.add("tpe-added");
+    // 小写名写进 dataset，syncGridSelection() 靠它做增量高亮同步
+    card.dataset.tag = item.t.toLowerCase();
+    if (used.has(card.dataset.tag)) card.classList.add("tpe-added");
     card.title = `${item.t}${item.zh ? " — " + item.zh : ""}${item.n ? `\n热度 ${item.n.toLocaleString()}` : ""}`;
 
     const en = document.createElement("span");
@@ -921,8 +940,9 @@ function addTag(st, item) {
   } else {
     st.tags.push({ t: item.t, w: 1, on: true });
   }
+  // commit -> renderChips -> syncGridSelection：高亮会增量同步，
+  // 不用整块 renderGrid（那样会把网格滚动位置清零）
   commit(st);
-  renderGrid(st);
 }
 
 // ---------------------------------------------------------------------------
