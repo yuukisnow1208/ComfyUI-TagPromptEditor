@@ -86,6 +86,8 @@ TAG_PROMPT_EDITOR_TAGS_DIR=/path/to/your/tags
 1. 新建节点：`utils/prompt` → **🏷️ 标签提示词编辑器**。
 2. 在**最下面的搜索框**输入中文或英文（试试「长发」或 `long_hair`），点结果卡片加入。
 3. 上面的标签块区会出现方块 —— 鼠标移上去有工具条，拖动可排序，点 `×` 删。
+4. 卡片选择是**双向**的：已在提示词里的 tag，再点一次它的卡片就会移除；
+   高亮框亮 = 已在提示词里，灭 = 不在。
 
 节点内部从上到下是三块：
 
@@ -388,7 +390,7 @@ curl --noproxy '*' -X POST -H "Content-Type: application/json" \
 插件零构建：改完 `web/` 下的 JS / CSS 刷新页面即可生效，
 改完 Python 需要重启 ComfyUI（`/reload` 不会重载 Python 模块）。
 
-测试脚本在 `dev/`，**9 个脚本、合计 549 项断言**，含真实服务端端到端与真实浏览器验证：
+测试脚本在 `dev/`，**9 个脚本、合计 554 项断言**，含真实服务端端到端与真实浏览器验证：
 
 | 脚本 | 覆盖 | 结果 |
 | --- | --- | --- |
@@ -397,7 +399,7 @@ curl --noproxy '*' -X POST -H "Content-Type: application/json" \
 | `dev/test_favorites.py` | 收藏读写、原子写入、坏文件容错、并发 | 47 项 ✅ |
 | `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 7 个路由 + 三级路径筛选 + STRING 透传 | 53 项 ✅ |
 | `dev/ui_tag_cats.mjs` | 分类栏专项：三级下钻、分级配色、行可见性、搜索×分类叠加、筛选与后端对拍 | 73 项 ✅ |
-| `dev/ui_tag_editor.mjs` | 浏览器：结构恢复、中文译名、工具条、拖拽、编辑、搜索、上下联动 | 65 项 ✅ |
+| `dev/ui_tag_editor.mjs` | 浏览器：结构恢复、中文译名、工具条、拖拽、编辑、搜索、卡片双向选择、上下联动 | 70 项 ✅ |
 | `dev/ui_tag_bar.mjs` | 工具条专项：悬停 / 权重 / 括号 / 收藏落盘 / 单击编辑 / 双击禁用 | 49 项 ✅ |
 | `dev/verify_git_eol.py` | 模拟 `git clone`，对比 CRLF 源文件与 LF 检出后词库加载结果 | 27 项 ✅ |
 | `dev/verify_resize.mjs` | 节点缩放自适应：拖宽、拖高、拖矮 + 功能回归 | 14 项 ✅ |

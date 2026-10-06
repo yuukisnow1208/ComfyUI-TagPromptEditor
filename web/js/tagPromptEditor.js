@@ -1072,7 +1072,7 @@ function renderGrid(st) {
 
     card.addEventListener("click", (e) => {
       e.stopPropagation();
-      addTag(st, item);
+      toggleTag(st, item);
     });
     grid.appendChild(card);
   }
@@ -1112,12 +1112,16 @@ function renderGrid(st) {
   }
 }
 
-function addTag(st, item) {
+function toggleTag(st, item) {
   const key = item.t.toLowerCase();
   if (item.zh) st.zhCache.set(key, item.zh);
-  const existing = st.tags.find((t) => t.t.toLowerCase() === key);
-  if (existing) {
-    existing.on = true;
+  const idx = st.tags.findIndex((t) => t.t.toLowerCase() === key);
+  if (idx >= 0 && st.tags[idx].on) {
+    // 已在提示词里 → 再点一次 = 移除（选择是双向的）
+    st.tags.splice(idx, 1);
+  } else if (idx >= 0) {
+    // 被禁用的（保留在编辑器但不写入提示词）→ 重新启用，而不是删除
+    st.tags[idx].on = true;
   } else {
     st.tags.push({ t: item.t, w: 1, on: true });
   }
