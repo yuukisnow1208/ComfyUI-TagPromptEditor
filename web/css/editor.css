@@ -482,6 +482,23 @@
   cursor: pointer;
 }
 
+/* 网格空态。注意 .tpe-grid 的 grid-auto-rows 是 34px 的定高行，
+   直接放一个多行块会被压扁重叠，所以跨两行 + align-self:start 让它按内容撑开。 */
+.tpe-empty {
+  grid-column: 1 / -1;
+  grid-row: span 2;
+  align-self: start;
+  padding: 12px 10px;
+  color: var(--tpe-fg-dim);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.tpe-empty-sub {
+  opacity: 0.72;
+}
+
 .tpe-warnbar {
   flex: none;
   padding: 4px 8px;

@@ -152,6 +152,16 @@ node dev/verify_resize.mjs --port 8288
 - **`WEB_DIRECTORY` 只在 `__init__.py` 里声明**，`pyproject.toml` 里**不要**写
   `[tool.comfy] web`。两边都写会让 ComfyUI 按「模块名」和「project.name」各注册一次，
   JS 被导入两遍。
+- **筛选条件之间是「叠加」，别在前端偷偷丢掉一个**。结果网格由两个条件共同决定：
+  搜索词（`q`）和分类路径（`cat`）。`refreshGrid()` 里一度写成
+  `const cat = searching || !st.path.length ? "all" : ...` —— 只要搜索框里有词，
+  就把当前分类整个丢掉，于是「先搜索、再点下面的分类」时分类看着完全没反应。
+  但后端 `search(q, cat)` 本来就是「先在分类子集里取 `base`、再在 `base` 上匹配打分」，
+  能力一直都在，纯粹是前端没把 `cat` 传下去。教训是：
+  **「有 A 时忽略 B」这种写法必须能说出理由，说不出来就是 bug。**
+  另外两者叠加后「搜出 0 条」会变成常见结果，所以空态必须有话说
+  （状态栏把两个条件都写全、网格里给一句怎么放宽范围）——
+  否则一片空白和「还在加载」长得一模一样。
 - **排查这类前端问题的有效手法**：给可疑属性装 `defineProperty` setter 抓调用栈，
   `new Error().stack` 会直接指出是哪个前端函数写的值 —— 比翻 minified bundle 快得多。
 

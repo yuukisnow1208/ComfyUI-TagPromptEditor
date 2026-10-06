@@ -129,7 +129,10 @@ function setupEditor(node) {
     gridEl: null,
     statusEl: null,
     tree: [],            // 分类树（从 /categories 拉，含每级条数）
-    path: ["fav"],       // 当前分类路径，用节点 id 拼：["服饰"] / ["服饰","上衣"]
+    // 当前分类路径，用节点 id 拼：["服饰"] / ["服饰","上衣"]
+    // 默认空 = 「全部」（不限范围）。**不能默认停在「推荐」**：推荐只有 120 条精选，
+    // 而搜索是跟着分类走的，默认落在它上面会让「刚打开就搜」几乎搜不到东西。
+    path: [],
     query: "",
     items: [],
     hasMore: false,
@@ -998,10 +1001,15 @@ function setStatus(st, text, isError = false) {
 }
 
 async function refreshGrid(st, append) {
-  // 搜索时忽略分类：分类栏是「浏览」用的，搜索是「找某个具体标签」——
-  // 后者加了范围限制反而找不到（比如在「服饰」下搜 long_hair）。
-  const searching = !!st.query.trim();
-  const cat = searching || !st.path.length ? "all" : st.path.join("/");
+  // 搜索词与分类是**叠加**关系，不是二选一：
+  //   搜索词决定「匹配什么」，分类决定「在哪个范围里找」。
+  // 所以「先搜索、再点分类」会真的把结果收窄（这也是用户要的语义），
+  // 后端 search() 本来就是在分类子集里做匹配打分，前端只管把 cat 传下去。
+  // 想全库搜索时点分类栏的「全部」即可 —— 那本就是「不限范围」。
+  const q = st.query.trim();
+  const searching = !!q;
+  const hasCat = st.path.length > 0;
+  const cat = hasCat ? st.path.join("/") : "all";
 
   st.fetching?.abort();
   const ctrl = new AbortController();
@@ -1010,7 +1018,7 @@ async function refreshGrid(st, append) {
 
   try {
     const data = await fetchTags({
-      q: st.query,
+      q,
       cat,
       offset: append ? st.items.length : 0,
       signal: ctrl.signal,
@@ -1021,7 +1029,13 @@ async function refreshGrid(st, append) {
     renderGrid(st);
     if (data.error) setStatus(st, data.error, true);
     else {
-      const scope = searching ? `搜「${st.query.trim()}」` : pathLabel(st);
+      // 两个条件都写进状态栏：否则「搜出来 0 条」时人分不清是词库没有，
+      // 还是被当前分类挡住了范围。
+      const parts = [];
+      if (searching) parts.push(`搜「${q}」`);
+      const catLabel = pathLabel(st);
+      if (catLabel) parts.push(catLabel);
+      const scope = parts.join(" · ");
       setStatus(
         st,
         `已显示 ${st.items.length}${st.hasMore ? "+" : ""} 条${scope ? ` · ${scope}` : ""}`,
@@ -1072,6 +1086,29 @@ function renderGrid(st) {
       refreshGrid(st, true);
     });
     grid.appendChild(more);
+  }
+
+  // 空态：搜索与分类叠加后，「这个分类下没有这个词」是正常结果，
+  // 但一片空白的网格看起来跟「还在加载」一模一样 —— 给一句人话，
+  // 并写明怎么放宽范围，免得用户以为词库坏了。
+  if (!st.items.length) {
+    const q = st.query.trim();
+    const catLabel = pathLabel(st);
+    const empty = document.createElement("div");
+    empty.className = "tpe-empty";
+    const main = document.createElement("div");
+    if (q && catLabel) main.textContent = `「${catLabel}」分类下没有匹配「${q}」的标签`;
+    else if (q) main.textContent = `没有匹配「${q}」的标签`;
+    else if (catLabel) main.textContent = `「${catLabel}」分类下暂时没有标签`;
+    else main.textContent = "没有可显示的标签";
+    empty.appendChild(main);
+    if (q && catLabel) {
+      const sub = document.createElement("div");
+      sub.className = "tpe-empty-sub";
+      sub.textContent = "点分类栏的「全部」可以在全库范围内搜索";
+      empty.appendChild(sub);
+    }
+    grid.appendChild(empty);
   }
 }
 
