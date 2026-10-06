@@ -132,6 +132,7 @@ curl --noproxy '*' "http://127.0.0.1:8188/tag_prompt_editor/tags?q=长发&limit=
 | `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 4 个路由 + STRING 透传 | 全过 ✅ |
 | `dev/ui_tag_editor.mjs` | Playwright 打开浏览器，点 tab / 卡片 / 权重气泡 / 拖拽 / 删除，截图 | 33 项 ✅ |
 | `dev/verify_resize.mjs` | 节点缩放自适应：拖文本框、拖宽、拖高、拖矮 + 功能回归 | 14 项 ✅ |
+| `dev/verify_git_eol.py` | 模拟 `git clone`，对比 CRLF 源文件与 LF 检出后的词库加载结果 | 27 项 ✅ |
 
 `test_tag_core.mjs` 的特别之处：它把 `comfy/sd1_clip.py` 里的 `parse_parentheses` 和
 `token_weights` 原样移植成 JS，作为**真值**来断言前端序列化的结果 —— 保证生成的 prompt
