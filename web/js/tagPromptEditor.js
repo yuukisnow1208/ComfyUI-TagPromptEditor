@@ -359,7 +359,7 @@ function renderChips(st) {
     if (tag.w > 1) weight.classList.add("tpe-w-up");
     else if (tag.w < 1) weight.classList.add("tpe-w-down");
     weight.textContent = Core.formatWeight(tag.w);
-    weight.title = "点击打开工具条（chip 上滚轮 = 微调 0.05，Shift+滚轮 = 按档位调）";
+    weight.title = "点击打开工具条调整权重";
     weight.addEventListener("click", (e) => {
       e.stopPropagation();
       clearTimeout(st.clickTimer);
@@ -385,15 +385,9 @@ function renderChips(st) {
 
     chip.append(weight, del);
 
-    chip.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // 滚轮 = 细调 0.05；按住 Shift = 沿预设档位粗调
-      tag.w = e.shiftKey
-        ? Core.stepWeight(tag.w, e.deltaY < 0 ? 1 : -1)
-        : Core.clampWeight(tag.w + (e.deltaY < 0 ? 0.05 : -0.05));
-      commit(st);
-    }, { passive: false });
+    // 注：这里**故意不接管滚轮**。曾经「光标悬在 chip 上滚滚轮 = 按 0.05 调权重」，
+    // 但标签块区本身是可滚动的，误触一格就把权重改了，删除该交互。
+    // 现在滚轮正常冒泡给 .tpe-chips 滚动；权重只走工具条（点权重数字 / ⊖ ⊕）。
 
     chip.addEventListener("dragstart", (e) => {
       st.dragFrom = index;
@@ -846,9 +840,10 @@ function wireCats(st) {
   });
 }
 
-function catChip(st, label, path, title) {
+function catChip(st, label, path, title, level = 1) {
   const btn = document.createElement("button");
-  btn.className = "tpe-tab";
+  // 带上层级类名，让「大类 / 小类 / 细类」用不同颜色区分（见 editor.css 的 .tpe-lv*）
+  btn.className = `tpe-tab tpe-lv${Math.min(level, 3)}`;
   btn.textContent = label;
   btn.title = title || "";
   const same = path.length === st.path.length
@@ -867,12 +862,12 @@ function renderCats(st) {
   const box = st.catsEl;
   box.innerHTML = "";
 
-  // 第一行：全部 + 各大类
+  // 第一行：全部 + 各大类（层级 1）
   const row1 = document.createElement("div");
   row1.className = "tpe-catrow";
-  row1.appendChild(catChip(st, "全部", [], "不限分类"));
+  row1.appendChild(catChip(st, "全部", [], "不限分类", 1));
   for (const node of st.tree) {
-    row1.appendChild(catChip(st, node.name, [node.id], `${node.count.toLocaleString()} 个标签`));
+    row1.appendChild(catChip(st, node.name, [node.id], `${node.count.toLocaleString()} 个标签`, 1));
   }
   box.appendChild(row1);
 
@@ -884,11 +879,12 @@ function renderCats(st) {
     const kids = cur.children || [];
     if (!kids.length) break;
     const prefix = st.path.slice(0, depth + 1);
+    const level = depth + 2;   // 第二行起算小类(2) / 细类(3)
     const row = document.createElement("div");
     row.className = "tpe-catrow";
-    row.appendChild(catChip(st, "全部", prefix, `不限小类 · ${cur.count.toLocaleString()} 个标签`));
+    row.appendChild(catChip(st, "全部", prefix, `不限小类 · ${cur.count.toLocaleString()} 个标签`, level));
     for (const kid of kids) {
-      row.appendChild(catChip(st, kid.name, prefix.concat(kid.id), `${kid.count.toLocaleString()} 个标签`));
+      row.appendChild(catChip(st, kid.name, prefix.concat(kid.id), `${kid.count.toLocaleString()} 个标签`, level));
     }
     box.appendChild(row);
     nodes = kids;
