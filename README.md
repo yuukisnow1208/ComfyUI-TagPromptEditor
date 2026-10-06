@@ -71,9 +71,10 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/yuukisnow1208/ComfyUI-TagPromptEditor.git
 ```
 
-没有 git 的话，也可以直接下载 ZIP 解压到 `ComfyUI/custom_nodes/`，
-或用 ComfyUI Manager 搜 `TagPromptEditor` 安装。
+没有 git 的话，直接下载 ZIP 解压到 `ComfyUI/custom_nodes/` 也一样。
 
+> 尚未提交到 ComfyUI-Manager 的插件注册表，所以 Manager 里暂时搜不到，请用上面的方式安装。
+>
 > **不支持**放进 `custom_nodes` 的二级子目录（如 `custom_nodes/my-plugins/xxx`），
 > 必须直接是 `custom_nodes/ComfyUI-TagPromptEditor/`。
 
