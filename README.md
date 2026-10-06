@@ -66,20 +66,16 @@ ComfyUI 原生的提示词输入只有一个 `CLIPTextEncode` 的多行文本框
 
 ## 📦 安装
 
-把整个 `ComfyUI-TagPromptEditor/` 目录放进 `ComfyUI/custom_nodes/` 即可：
-
 ```bash
-cp -r ComfyUI-TagPromptEditor /path/to/ComfyUI/custom_nodes/
+cd ComfyUI/custom_nodes
+git clone https://github.com/yuukisnow1208/ComfyUI-TagPromptEditor.git
 ```
 
-在 Windows 秋叶整合包上是：
+没有 git 的话，也可以直接下载 ZIP 解压到 `ComfyUI/custom_nodes/`，
+或用 ComfyUI Manager 搜 `TagPromptEditor` 安装。
 
-```bash
-cp -r ComfyUI-TagPromptEditor "E:/AI/ComfyUI-aki-v3/ComfyUI/custom_nodes/"
-```
-
-> 本项目目前**尚未发布到 GitHub**（无远程仓库），用上面的方式本地安装。
-> 之后若要发布，把仓库地址补到这里即可。
+> **不支持**放进 `custom_nodes` 的二级子目录（如 `custom_nodes/my-plugins/xxx`），
+> 必须直接是 `custom_nodes/ComfyUI-TagPromptEditor/`。
 
 重启 ComfyUI，节点出现在 `utils/prompt` 分类下，搜「标签」或「tag editor」都能找到。
 
