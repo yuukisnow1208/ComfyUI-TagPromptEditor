@@ -1,0 +1,362 @@
+/* ComfyUI-TagPromptEditor · 样式
+   全部变量走 ComfyUI 自己的 CSS 变量（带 fallback），跟随明暗主题自动切换，
+   不硬编码颜色；类名统一 tpe- 前缀，避免污染其它插件。 */
+
+.tpe-chips,
+.tpe-chips-wrap,
+.tpe-panel,
+.tpe-pop {
+  --tpe-fg: var(--input-text, #dcdcdc);
+  --tpe-fg-dim: var(--descrip-text, #9a9a9a);
+  --tpe-bg: var(--comfy-input-bg, #262626);
+  --tpe-bg-2: var(--comfy-menu-bg, #2f2f2f);
+  --tpe-line: var(--border-color, #565656);
+  --tpe-accent: var(--p-primary-color, #4e8cff);
+  --tpe-chip: #534ab7;
+  --tpe-chip-fg: #eeedfe;
+  --tpe-up: #993556;
+  --tpe-down: #0f6e56;
+  --tpe-warn: #ba7517;
+  box-sizing: border-box;
+  font-size: 12px;
+  color: var(--tpe-fg);
+  user-select: none;
+}
+
+.tpe-chips *,
+.tpe-chips-wrap *,
+.tpe-panel * {
+  box-sizing: border-box;
+}
+
+/* 标签块区（外层）—— 高度由 JS 量出来喂给节点，所以子元素必须禁止 flex 收缩，
+   否则节点被强制改高/改矮时会反过来把子元素压扁，量出来的值就失真了。 */
+.tpe-chips-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.tpe-chips-wrap > * {
+  flex: none;
+}
+
+/* ---------- 标签块区 ---------- */
+
+.tpe-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 46px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 8px;
+  background: var(--tpe-bg);
+}
+
+.tpe-empty {
+  color: var(--tpe-fg-dim);
+  line-height: 22px;
+  font-size: 12px;
+}
+
+.tpe-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 4px 0 9px;
+  border-radius: 6px;
+  background: var(--tpe-chip);
+  color: var(--tpe-chip-fg);
+  white-space: nowrap;
+  cursor: grab;
+  transition: opacity 0.1s;
+}
+
+.tpe-chip.tpe-off {
+  background: #444441;
+  color: #9a9a9a;
+  opacity: 0.72;
+}
+
+.tpe-chip.tpe-bracket {
+  outline: 1px dashed var(--tpe-warn);
+  outline-offset: 1px;
+}
+
+.tpe-chip.tpe-drag {
+  opacity: 0.35;
+}
+
+.tpe-chip.tpe-drop {
+  box-shadow: -2px 0 0 0 var(--tpe-accent);
+}
+
+.tpe-chip-label {
+  cursor: pointer;
+}
+
+.tpe-chip-w {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  background: rgba(0, 0, 0, 0.26);
+  cursor: pointer;
+}
+
+.tpe-chip-w.tpe-w-up {
+  background: var(--tpe-up);
+}
+
+.tpe-chip-w.tpe-w-down {
+  background: var(--tpe-down);
+}
+
+.tpe-chip-del {
+  padding: 0 3px;
+  font-size: 13px;
+  line-height: 16px;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.tpe-chip-del:hover {
+  opacity: 1;
+}
+
+/* ---------- 工具栏 ---------- */
+
+.tpe-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.tpe-title {
+  font-weight: 500;
+}
+
+.tpe-count {
+  color: var(--tpe-fg-dim);
+  margin-right: auto;
+}
+
+.tpe-btn {
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 5px;
+  background: var(--tpe-bg-2);
+  color: var(--tpe-fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tpe-btn:hover {
+  border-color: var(--tpe-accent);
+}
+
+/* ---------- 权重气泡 ----------
+   挂在 document.body 上用 position:fixed，不走节点内的 DOM widget 层。
+   原因：DOM widget 会被后渲染的兄弟（预设面板）盖住，而且 Comfy.DOMClippingEnabled
+   开启时会把它裁掉 —— 挂在 body 上就完全不受这两个影响。 */
+
+.tpe-pop {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 176px;
+  padding: 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 8px;
+  background: var(--tpe-bg-2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.tpe-pop * {
+  box-sizing: border-box;
+}
+
+.tpe-pop input[type="range"],
+.tpe-pop input[type="number"],
+.tpe-pop .tpe-btn {
+  /* 气泡挂在 body 上，拿不到宿主表单样式，这里补一下最小可读样式 */
+  accent-color: var(--tpe-accent);
+}
+
+.tpe-pop-title {
+  color: var(--tpe-fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpe-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tpe-pop input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.tpe-pop input[type="number"] {
+  width: 58px;
+  flex: none;
+}
+
+.tpe-pop-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 预设面板 ---------- */
+
+.tpe-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 8px;
+  background: var(--tpe-bg);
+}
+
+.tpe-searchrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.tpe-search {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 6px;
+  background: var(--tpe-bg-2);
+  color: var(--tpe-fg);
+  font-size: 12px;
+  user-select: text;
+}
+
+.tpe-status {
+  flex: none;
+  color: var(--tpe-fg-dim);
+  white-space: nowrap;
+}
+
+.tpe-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: none;
+}
+
+.tpe-tab {
+  height: 20px;
+  padding: 0 9px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--tpe-fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tpe-tab.tpe-active {
+  border-color: var(--tpe-accent);
+  background: var(--tpe-accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+.tpe-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-auto-rows: 34px;
+  gap: 5px;
+  align-content: start;
+}
+
+.tpe-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 6px;
+  background: var(--tpe-bg-2);
+  color: var(--tpe-fg);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.tpe-card:hover {
+  border-color: var(--tpe-accent);
+}
+
+.tpe-card.tpe-added {
+  border-color: var(--tpe-down);
+}
+
+.tpe-card-en,
+.tpe-card-zh {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpe-card-zh {
+  color: var(--tpe-fg-dim);
+  font-size: 10px;
+}
+
+.tpe-more {
+  grid-column: 1 / -1;
+  height: 26px;
+  border: 1px dashed var(--tpe-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tpe-fg-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tpe-warnbar {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(186, 117, 23, 0.16);
+  color: var(--tpe-warn);
+  font-size: 11px;
+  line-height: 1.5;
+}
