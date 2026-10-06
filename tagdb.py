@@ -475,6 +475,29 @@ class TagDB:
         self.ensure_loaded()
         return self._tree
 
+    def lookup(self, names):
+        """按标签名批量取中文名，给标签块的「英文下方显示中文」用。
+
+        标签块里的 tag 是用户在文本框里打的，压根没经过 :meth:`search`，
+        所以手上只有英文名。这里回词库查一遍。
+
+        返回 ``{请求名: 中文名}``；**没有中文的条目不会出现在结果里**，
+        调用方据此把中文行留空（不显示一个空壳）。
+        查表前统一小写：词库里的名字都小写，而用户可能打成 ``1Girl``。
+        """
+        self.ensure_loaded()
+        out = {}
+        for raw in names or ():
+            if not isinstance(raw, str):
+                continue
+            name = raw.strip()
+            if not name:
+                continue
+            e = self._by_name.get(name) or self._by_name.get(name.lower())
+            if e and e.zh:
+                out[name] = e.zh
+        return out
+
     def search(self, q: str = "", cat=None, limit: int = 60, offset: int = 0):
         """返回 (items, has_more)。
 

@@ -12,7 +12,7 @@ ComfyUI 原生写提示词只有一个 `CLIPTextEncode` 的多行文本框：纯
 
 ![界面截图](docs/screenshot.png)
 
-> 本文档对应 **v1.2.2**。历史版本见 [Tags](https://github.com/yuukisnow1208/ComfyUI-TagPromptEditor/tags)。
+> 本文档对应 **v1.2.3**。历史版本见 [Tags](https://github.com/yuukisnow1208/ComfyUI-TagPromptEditor/tags)。
 
 ---
 
@@ -90,20 +90,21 @@ TAG_PROMPT_EDITOR_TAGS_DIR=/path/to/your/tags
 节点内部从上到下是三块：
 
 ```
-┌────────────────────────────────────────────┐
-│ 1girl, long_hair, (masterpiece:1.2), smile │  ← ① 原生文本框（ComfyUI 自带）
-├────────────────────────────────────────────┤
-│ 去重  排序  权重归1  清空     共7个 · 生效7个 │  ← ② 工具栏
-│ [1girl×] [long_hair×] [masterpiece ×1.2]   │  ←    标签块
-├────────────────────────────────────────────┤
-│ 🔍 搜索……                   已显示 120+ 条   │  ← ③ 分类栏
-│ [全部][推荐][质量词][负面][人物主体][面部]…    │     第一行：24 个大类
-│ [全部][配饰][上衣][制服][鞋袜][裤装]…        │     第二行：小类
-│ [全部][长裤][短裤][牛仔裤]                    │     第三行：细类
-│ ┌────────┐┌────────┐┌────────┐           │
-│ │ jeans  ││ pants  ││shorts  │           │  ←    结果网格，滚到底自动翻页
+┌─────────────────────────────────────────────┐
+│ 1girl, long_hair, (masterpiece:1.2), smile  │  ← ① 原生文本框（ComfyUI 自带）
+├─────────────────────────────────────────────┤
+│ 去重 排序 权重归1 清空  共7个 · 生效7个      │  ← ② 工具栏
+│ [1girl] [long_hair] [masterpiece 1.2]       │  ←    标签块（英文）
+│  1女孩    长发        杰作                  │     有中文 → 中文在下一行
+├─────────────────────────────────────────────┤
+│ 🔍 搜索……                   已显示 120+ 条  │  ← ③ 分类栏
+│ [全部][推荐][质量词][负面][人物主体][面部]… │     第一行：24 个大类
+│ [全部][配饰][上衣][制服][鞋袜][裤装]…       │     第二行：小类
+│ [全部][长裤][短裤][牛仔裤]                  │     第三行：细类
+│ ┌────────┐┌────────┐┌────────┐              │
+│ │ jeans  ││ pants  ││shorts  │              │  ←    结果网格，滚到底自动翻页
 │ │ 牛仔裤  ││ 长裤    ││ 短裤    │           │
-└────────────────────────────────────────────┘
+└─────────────────────────────────────────────┘
 ```
 
 编辑结果会实时写回 ① 的文本框 —— 所以保存、复制粘贴、撤销重做
@@ -125,6 +126,19 @@ TAG_PROMPT_EDITOR_TAGS_DIR=/path/to/your/tags
 
 单击与双击靠 **250 ms 判定窗口**区分：单击后先等一下，确认没有第二下才进入编辑
 （和 WebUI 的手感一致）。
+
+**中文译名**：词库里有中文的标签，中文会显示在英文**下一行**，同一个方块里：
+
+```
+┌───────────────┐   ┌───────────────┐
+│ 1girl      1 ×│   │ best_quality 1×│
+│ 1女孩          │   └───────────────┘
+└───────────────┘    词库里没中文 → 保持单行
+```
+
+中文是**按需异步补的**：方块先把英文画出来，再把这一批里还没查过的名字一次性
+问后端，结果缓存在浏览器里（同一个标签只问一次，点选、拖拽、重排都不会重复请求）。
+所以刚打开工作流的那一下能看到中文「浮现」出来，属正常。
 
 ### 悬浮工具条
 
@@ -321,6 +335,7 @@ Danbooru 官方只给了 5 个粗分类号（通用 28,141 / 画师 49,441 / 作
 | GET | `/tag_prompt_editor/health` | 词库统计：总数、带中文数、来源目录、分类节点数、未归类数、加载错误 |
 | GET | `/tag_prompt_editor/categories` | 分类树（嵌套 `{id, name, count, children}`），首项是「推荐」 |
 | GET | `/tag_prompt_editor/tags?q=&cat=&limit=60&offset=0` | 分页搜索，返回 `{items, hasMore}`，每项带 `fav` |
+| GET | `/tag_prompt_editor/lookup?tags=1girl,solo` | 按名字批量取中文名（标签块那行中文用它），没有中文的条目不出现 |
 | GET | `/tag_prompt_editor/favorites` | 收藏列表 `{tags, count}` |
 | POST | `/tag_prompt_editor/favorites` | body `{action: "toggle"\|"add"\|"remove", tag}` |
 | GET | `/tag_prompt_editor/reload` | 换过词库 CSV 后热重载，不用重启 ComfyUI |
@@ -342,6 +357,10 @@ curl --noproxy '*' --get --data-urlencode "q=长发" --data "limit=5" \
 curl --noproxy '*' --get --data-urlencode "cat=服饰/鞋袜" --data "limit=5" \
   "http://127.0.0.1:8188/tag_prompt_editor/tags"
 
+# 批量查中文名（逗号分隔，大小写不敏感）
+curl --noproxy '*' --get --data "tags=1girl,solo,long_hair" \
+  "http://127.0.0.1:8188/tag_prompt_editor/lookup"
+
 curl --noproxy '*' -X POST -H "Content-Type: application/json" \
   -d '{"action":"toggle","tag":"masterpiece"}' \
   "http://127.0.0.1:8188/tag_prompt_editor/favorites"
@@ -358,16 +377,16 @@ curl --noproxy '*' -X POST -H "Content-Type: application/json" \
 插件零构建：改完 `web/` 下的 JS / CSS 刷新页面即可生效，
 改完 Python 需要重启 ComfyUI（`/reload` 不会重载 Python 模块）。
 
-测试脚本在 `dev/`，**9 个脚本、合计 522 项断言**，含真实服务端端到端与真实浏览器验证：
+测试脚本在 `dev/`，**9 个脚本、合计 537 项断言**，含真实服务端端到端与真实浏览器验证：
 
 | 脚本 | 覆盖 | 结果 |
 | --- | --- | --- |
 | `dev/test_tag_core.mjs` | 前端纯逻辑（解析 / 序列化 / 权重 / 排序 / 去重） | 49 项 ✅ |
-| `dev/test_tagdb.py` | 词库加载、编码嗅探、语义分类、分类树、三级下钻、搜索排序、分页 | 172 项 ✅ |
+| `dev/test_tagdb.py` | 词库加载、编码嗅探、语义分类、分类树、三级下钻、中文查表、搜索排序、分页 | 172 项 ✅ |
 | `dev/test_favorites.py` | 收藏读写、原子写入、坏文件容错、并发 | 47 项 ✅ |
-| `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 6 个路由 + 三级路径筛选 + STRING 透传 | 48 项 ✅ |
+| `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 7 个路由 + 三级路径筛选 + STRING 透传 | 53 项 ✅ |
 | `dev/ui_tag_cats.mjs` | 分类栏专项：三级下钻、分级配色、行可见性、筛选与后端对拍 | 61 项 ✅ |
-| `dev/ui_tag_editor.mjs` | 浏览器：结构恢复、工具条、拖拽、编辑、搜索、上下联动 | 55 项 ✅ |
+| `dev/ui_tag_editor.mjs` | 浏览器：结构恢复、中文译名、工具条、拖拽、编辑、搜索、上下联动 | 65 项 ✅ |
 | `dev/ui_tag_bar.mjs` | 工具条专项：悬停 / 权重 / 括号 / 收藏落盘 / 单击编辑 / 双击禁用 | 49 项 ✅ |
 | `dev/verify_git_eol.py` | 模拟 `git clone`，对比 CRLF 源文件与 LF 检出后词库加载结果 | 27 项 ✅ |
 | `dev/verify_resize.mjs` | 节点缩放自适应：拖宽、拖高、拖矮 + 功能回归 | 14 项 ✅ |

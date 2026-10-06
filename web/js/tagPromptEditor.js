@@ -144,6 +144,7 @@ function setupEditor(node) {
     clickTimer: null,    // 用来区分单击（编辑）与双击（禁用）
     editingIndex: -1,    // 正在原地编辑的 chip 下标
     favSet: new Set(),   // 已收藏的标签名
+    zhCache: new Map(),  // 小写标签名 -> 中文名（见 ensureZh 的三态说明）
     dragFrom: -1,
     observer: null,
     lastSynced: null,
@@ -310,6 +311,8 @@ function renderChips(st) {
     const chip = document.createElement("span");
     chip.className = "tpe-chip";
     chip.draggable = true;
+    // 中文名是异步补上的，回填时要按名字找块 —— 下标会因拖拽/删除而失效，名字不会
+    chip.dataset.zh = tag.t.toLowerCase();
     if (!tag.on) chip.classList.add("tpe-off");
     if (st.favSet.has(tag.t)) chip.classList.add("tpe-fav");
     if (st.editingIndex === index) chip.classList.add("tpe-editing");
@@ -330,6 +333,11 @@ function renderChips(st) {
       chip.draggable = false;
       chip.appendChild(buildEditInput(st, index, tag));
     } else {
+      // 英文名 + 中文名上下两行。中文单独一个 span，**不塞进 label 里** ——
+      // label 的 textContent 被测试当作“标签名”断言，混进中文就全乱了。
+      const text = document.createElement("span");
+      text.className = "tpe-chip-text";
+
       const label = document.createElement("span");
       label.className = "tpe-chip-label";
       label.textContent = tag.t;
@@ -351,7 +359,17 @@ function renderChips(st) {
         tag.on = !tag.on;
         commit(st);
       });
-      chip.appendChild(label);
+
+      const zh = document.createElement("span");
+      zh.className = "tpe-chip-zh";
+      const cached = st.zhCache.get(tag.t.toLowerCase());
+      if (cached) zh.textContent = cached;
+      else zh.hidden = true;
+      // 点中文行等同于点英文 —— 中文行更矮，不该是个“点不动”的死区
+      zh.addEventListener("click", () => label.click());
+
+      text.append(label, zh);
+      chip.appendChild(text);
     }
 
     const weight = document.createElement("span");
@@ -424,7 +442,77 @@ function renderChips(st) {
   // 少了这一步就会出现「上面删了、下面方格还是选中的」。
   syncGridSelection(st);
   reanchorBar(st);
+  ensureZh(st);      // 缓存里就有的中文上面已经贴好了，缺的发一次批量查询补
   syncHeight(st);
+}
+
+// ---------------------------------------------------------------------------
+// 中文译名
+//
+// 标签块里的 tag 来自文本框解析，没经过搜索接口，手上只有英文名。这里把缺的
+// 名字攒起来批量问一次后端，结果记进 st.zhCache 复用（同一 tag 只问一次）。
+//
+// 缓存值有三态，别搞混：
+//   undefined  —— 还没查过，需要发起查询
+//   null       —— 查询在途（占位，防止同名 tag 重复发请求）
+//   ""         —— 查过了，词库里确实没有中文（不要反复重查）
+//   非空字符串 —— 就是中文名
+// ---------------------------------------------------------------------------
+
+const ZH_CHUNK = 200;   // 单个请求最多带几个名字
+
+function ensureZh(st) {
+  const todo = [];
+  const seen = new Set();
+  for (const tag of st.tags) {
+    const key = tag.t.toLowerCase();
+    if (seen.has(key) || st.zhCache.has(key)) continue;
+    seen.add(key);
+    todo.push(key);
+  }
+  if (!todo.length) return;
+
+  for (let i = 0; i < todo.length; i += ZH_CHUNK) {
+    const chunk = todo.slice(i, i + ZH_CHUNK);
+    for (const k of chunk) st.zhCache.set(k, null);
+    const url = `/tag_prompt_editor/lookup?tags=${encodeURIComponent(chunk.join(","))}`;
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data) => {
+        for (const k of chunk) st.zhCache.set(k, (data.lookup || {})[k] || "");
+        applyZh(st);
+      })
+      .catch(() => {
+        // 请求失败就把占位撤掉 —— 否则这些 tag 会被永久当成“查过了”，再也不补
+        for (const k of chunk) st.zhCache.delete(k);
+      });
+  }
+}
+
+/** 把缓存里的中文贴回已经渲染好的标签块。只改文字的显隐，不重建 DOM ——
+ * 重建会打断拖拽、把正在原地编辑的输入框一起清掉。 */
+function applyZh(st) {
+  const box = st.chipBox;
+  if (!box) return;
+  let changed = false;
+  for (const chip of box.querySelectorAll(".tpe-chip")) {
+    const key = chip.dataset.zh;
+    const span = key && chip.querySelector(".tpe-chip-zh");
+    if (!span) continue;
+    const zh = st.zhCache.get(key);
+    if (zh) {
+      if (span.textContent !== zh) {
+        span.textContent = zh;
+        changed = true;
+      }
+      span.hidden = false;
+    } else if (!span.hidden) {
+      span.hidden = true;
+      changed = true;
+    }
+  }
+  // 多出来一行中文会让块变高，节点高度得跟着走
+  if (changed) syncHeight(st);
 }
 
 /** 只翻转卡片的「已加入」高亮，不重建 DOM。
@@ -965,6 +1053,8 @@ function renderGrid(st) {
     zh.className = "tpe-card-zh";
     zh.textContent = item.zh || "";
     card.append(en, zh);
+    // 搜索结果里本来就带中文，顺手塞进缓存 —— 点选这张卡时标签块就不用再查一次
+    if (item.zh) st.zhCache.set(item.t.toLowerCase(), item.zh);
 
     card.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -987,6 +1077,7 @@ function renderGrid(st) {
 
 function addTag(st, item) {
   const key = item.t.toLowerCase();
+  if (item.zh) st.zhCache.set(key, item.zh);
   const existing = st.tags.find((t) => t.t.toLowerCase() === key);
   if (existing) {
     existing.on = true;

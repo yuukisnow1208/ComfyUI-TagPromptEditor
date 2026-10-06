@@ -76,8 +76,9 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 22px;
-  padding: 0 4px 0 9px;
+  /* 用 min-height 而不是 height —— 带中文时这个块要占两行 */
+  min-height: 22px;
+  padding: 2px 4px 2px 9px;
   border-radius: 6px;
   background: var(--tpe-chip);
   color: var(--tpe-chip-fg);
@@ -105,8 +106,34 @@
   box-shadow: -2px 0 0 0 var(--tpe-accent);
 }
 
+/* 标签名 + 中文译名：英文一行、中文一行，权重和 × 在右侧垂直居中 */
+.tpe-chip-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 1px;
+}
+
 .tpe-chip-label {
   cursor: pointer;
+  line-height: 15px;
+}
+
+/* 词库里没有中文的 tag 不显示这一行（renderChips 会置 hidden），
+   块自然回到单行高度，不会留个空洞 */
+.tpe-chip-zh {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 9.5px;
+  line-height: 12px;
+  opacity: 0.72;
+  cursor: pointer;
+}
+
+.tpe-chip-zh[hidden] {
+  display: none;
 }
 
 .tpe-chip-w {

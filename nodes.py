@@ -141,6 +141,25 @@ async def _tags(request):
     })
 
 
+async def _lookup(request):
+    """批量取中文名：GET /tag_prompt_editor/lookup?tags=1girl,solo,...
+
+    标签块里的 tag 来自文本框，不经过 /tags 搜索接口，所以拿不到中文名。
+    前端把当前块里的英文名攒起来一次性补查（结果在前端缓存，不重复问）。
+
+    名字用逗号分隔：tag 名只会是 ``[a-z0-9_()'-]``，不会自带逗号。
+    """
+    db = get_tag_db(_PLUGIN_DIR)
+    await _ensure_loaded(db)
+    names = [s.strip() for s in request.query.get("tags", "").split(",")]
+    names = [n for n in names if n][:500]     # 上限只是防滥用，一个块通常几十个
+    return web.json_response({
+        "lookup": db.lookup(names),
+        "count": len(names),
+        "error": db.error,
+    })
+
+
 async def _favorites_get(request):
     db = get_tag_db(_PLUGIN_DIR)
     fav, fav_set = _sync_favorites(db)
@@ -207,6 +226,7 @@ def _register_routes():
     routes.get("/tag_prompt_editor/health")(_health)
     routes.get("/tag_prompt_editor/categories")(_categories)
     routes.get("/tag_prompt_editor/tags")(_tags)
+    routes.get("/tag_prompt_editor/lookup")(_lookup)
     routes.get("/tag_prompt_editor/favorites")(_favorites_get)
     routes.post("/tag_prompt_editor/favorites")(_favorites_post)
     routes.get("/tag_prompt_editor/reload")(_reload)

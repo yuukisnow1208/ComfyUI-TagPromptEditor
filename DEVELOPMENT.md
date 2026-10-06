@@ -9,7 +9,7 @@
 ```
 ComfyUI-TagPromptEditor/
 ├── __init__.py        节点注册 + WEB_DIRECTORY（web 目录**只在这里**声明）
-├── nodes.py           节点定义 + 6 个 HTTP 路由
+├── nodes.py           节点定义 + 7 个 HTTP 路由
 ├── tagdb.py           词库加载 / 分类 / 索引 / 分页搜索
 ├── taxonomy.py        分类规则（纯规则，只依赖标准库 re，~123 KB）
 ├── favorites.py       收藏读写（原子写）
@@ -86,6 +86,9 @@ node dev/verify_resize.mjs --port 8288
   而测试里点胶囊用的是 DOM `click()`（不检查可见性）。所以断言「第三行存在」是不够的 ——
   必须量 `getBoundingClientRect()` 确认它落在容器的可视区内。
   （第 3 行被 `max-height: 112px` 藏掉的 bug 就是这样漏过去的。）
+- **量高度要挑块**：`.tpe-chips` 是 flex 容器，默认 `align-items: stretch`，
+  同一行里的方块高度会被**拉齐**。想断言「没有中文的方块是单行高度」，
+  必须让它**独占一行**再量 —— 随便抓一个块量，量到的可能是被同行的双行块撑出来的高度。
 
 ---
 
@@ -137,6 +140,15 @@ node dev/verify_resize.mjs --port 8288
   删标签时不同步 —— 这就是「上面点 × 删掉 tag，下面网格还留着绿色描边」的原因。
   做法是在 `renderChips()` 末尾统一调一次增量同步 `syncGridSelection()`。
   注意**不要**用整块重建来同步：`grid.innerHTML = ""` 会把滚动位置清零。
+- **异步补数据时别整块重渲染**。标签块里的 tag 来自文本框解析，手上没有中文名，
+  得向后端补查（`/lookup`）。结果回来时如果重跑 `renderChips()`，正在拖拽的块、
+  正在原地编辑的输入框都会被清掉。做法是把结果写进 `Map` 缓存，然后只改
+  `.tpe-chip-zh` 的文字和 `hidden`（`applyZh()`），DOM 结构一个都不动。
+  缓存值必须分**三态**：`undefined` 未查 / `null` 查询在途（占位，防同名 tag
+  重复发请求）/ `""` 查过确实没有 —— 少一态就会要么重复请求、要么再也补不上。
+  请求失败时把占位**删掉**（而不是留 `""`），否则那批 tag 会被永久当成「已查过」。
+  中文单独放一个 span、**不塞进 `.tpe-chip-label`**：label 的 `textContent`
+  是测试里「标签名」的断言基准，混进中文会连累一大片用例。
 - **`WEB_DIRECTORY` 只在 `__init__.py` 里声明**，`pyproject.toml` 里**不要**写
   `[tool.comfy] web`。两边都写会让 ComfyUI 按「模块名」和「project.name」各注册一次，
   JS 被导入两遍。
