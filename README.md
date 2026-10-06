@@ -162,8 +162,8 @@ curl --noproxy '*' -X POST -H "Content-Type: application/json" \
 | `dev/test_tagdb.py` | 词库加载、编码嗅探、分类、搜索排序、分页 | 73 项 ✅ |
 | `dev/test_favorites.py` | 收藏读写、原子写入、坏文件容错、并发、fav 分类合并 | 47 项 ✅ |
 | `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 6 个路由 + STRING 透传 | 全过 ✅ |
-| `dev/ui_tag_editor.mjs` | Playwright：结构恢复、工具条、拖拽、删除、编辑、搜索，截图 | 43 项 ✅ |
-| `dev/ui_tag_bar.mjs` | 工具条专项：悬停 / 权重 / 括号 / 收藏落盘 / 单击编辑 / 双击禁用 | 43 项 ✅ |
+| `dev/ui_tag_editor.mjs` | Playwright：结构恢复、工具条、拖拽、删除、编辑、搜索、上下联动，截图 | 53 项 ✅ |
+| `dev/ui_tag_bar.mjs` | 工具条专项：悬停 / 权重 / 括号 / 收藏落盘 / 单击编辑 / 双击禁用 / 上下联动 | 49 项 ✅ |
 | `dev/verify_resize.mjs` | 节点缩放自适应：拖文本框、拖宽、拖高、拖矮 + 功能回归 | 14 项 ✅ |
 | `dev/verify_git_eol.py` | 模拟 `git clone`，对比 CRLF 源文件与 LF 检出后的词库加载结果 | 27 项 ✅ |
 
@@ -237,6 +237,12 @@ E:/AI/ComfyUI-aki-v3/python/python.exe dev/e2e_tag_editor.py
 - **浮层的内容要跟着状态刷新**。工具条是「悬停时构建一次」的，但收藏 / 禁用 / 权重都会变 ——
   只在 `commit` 后重新定位的话，`★` 会一直停在旧状态（这个 bug 就是被 `dev/ui_tag_bar.mjs` 抓出来的）。
   用一串签名（`名称|权重|启用|收藏`）比对，变了才重建 DOM，既保证刷新又不至于每次编辑都闪。
+- **同一份状态被两处渲染时，别让两边走不同的更新路径**。「标签块」和「预设网格」都依赖
+  `tags` 数组：高亮是在 `renderGrid()` 里算的，但改标签的 `commit()` 只重渲染 chips，
+  只有「点卡片加入」那条路额外补了一次 `renderGrid()`。结果是加标签时高亮同步、删标签时不同步 ——
+  这正是「上面点 × 删掉 tag，下面方格还留着绿色描边」的原因。做法是在 `renderChips()` 末尾
+  统一调一次增量同步 `syncGridSelection()`，让所有改动路径都覆盖到。
+  注意**不要**用整块重建来同步：`grid.innerHTML = ""` 会把网格滚动位置清零。
 - **浏览器测试有加载时序竞态**。页面自己也会加载一遍默认工作流，可能**晚于**
   测试里的 `loadGraphData` 完成，把它刚塞进去的节点顶掉 —— 表现为随机超时、且看节点类型
   会全是 `SaveImage`/`KSampler` 这些默认节点。`dev/*.mjs` 统一用「重试到真的出现
