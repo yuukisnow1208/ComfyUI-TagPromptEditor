@@ -889,6 +889,11 @@ function renderCats(st) {
     box.appendChild(row);
     nodes = kids;
   }
+
+  // 分类栏总高受限（见 editor.css 的 max-height），而大类一行会换行占掉两行高，
+  // 于是下钻出来的那一行经常落在滚动区外面 —— 实测默认宽度下第三行整个被藏掉，
+  // 用户会以为「点不进去」。所以一旦下钻，就把最后一行滚进视野。
+  if (st.path.length) box.scrollTop = box.scrollHeight;
 }
 
 /** 当前分类的中文路径，用于状态栏 */
