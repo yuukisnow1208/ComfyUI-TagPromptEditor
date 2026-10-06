@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .DS_Store
+
+# 用户收藏是本地数据，不进仓库
+favorites.json
+.favorites-*.tmp

@@ -5,7 +5,7 @@
 .tpe-chips,
 .tpe-chips-wrap,
 .tpe-panel,
-.tpe-pop {
+.tpe-bar {
   --tpe-fg: var(--input-text, #dcdcdc);
   --tpe-fg-dim: var(--descrip-text, #9a9a9a);
   --tpe-bg: var(--comfy-input-bg, #262626);
@@ -133,6 +133,37 @@
   opacity: 1;
 }
 
+/* 已收藏。用 inset box-shadow 而不是 outline —— 方括号警告用的是 outline，
+   两者同时出现时会叠在一起互相干扰。 */
+.tpe-chip.tpe-fav {
+  box-shadow: inset 0 0 0 1px #e8b923;
+}
+
+.tpe-chip.tpe-fav .tpe-chip-label::before {
+  content: "★";
+  margin-right: 3px;
+  font-size: 9px;
+  color: #e8b923;
+}
+
+/* 正在原地编辑 */
+.tpe-chip.tpe-editing {
+  cursor: text;
+}
+
+.tpe-chip-input {
+  width: 118px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--tpe-accent);
+  border-radius: 4px;
+  background: var(--tpe-bg);
+  color: var(--tpe-chip-fg);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
 /* ---------- 工具栏 ---------- */
 
 .tpe-toolbar {
@@ -172,58 +203,88 @@
    原因：DOM widget 会被后渲染的兄弟（预设面板）盖住，而且 Comfy.DOMClippingEnabled
    开启时会把它裁掉 —— 挂在 body 上就完全不受这两个影响。 */
 
-.tpe-pop {
+.tpe-bar {
   position: fixed;
   z-index: 10000;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 176px;
-  padding: 8px;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 5px;
   border: 1px solid var(--tpe-line);
   border-radius: 8px;
   background: var(--tpe-bg-2);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
-.tpe-pop * {
+.tpe-bar * {
   box-sizing: border-box;
 }
 
-.tpe-pop input[type="range"],
-.tpe-pop input[type="number"],
-.tpe-pop .tpe-btn {
-  /* 气泡挂在 body 上，拿不到宿主表单样式，这里补一下最小可读样式 */
+.tpe-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--tpe-fg);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tpe-bar-btn:hover {
+  background: var(--tpe-bg);
+  border-color: var(--tpe-line);
+}
+
+/* 括号字符天生笔画细、位置偏下，单独放大并上提才看得清 */
+.tpe-bar-btn[data-act="paren-add"],
+.tpe-bar-btn[data-act="paren-del"] {
+  font-size: 18px;
+  font-weight: 600;
+  padding-bottom: 3px;
+}
+
+/* 收藏 / 禁用这类状态按钮点亮时用金色，和 chip 上的小星标呼应 */
+.tpe-bar-btn.tpe-on {
+  color: #e8b923;
+}
+
+.tpe-bar-btn[data-act="del"]:hover {
+  color: #e06c75;
+}
+
+.tpe-bar-w {
+  width: 56px;
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--tpe-line);
+  border-radius: 5px;
+  background: var(--tpe-bg);
+  color: var(--tpe-fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  text-align: center;
   accent-color: var(--tpe-accent);
 }
 
-.tpe-pop-title {
-  color: var(--tpe-fg-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 去掉 number 输入框自带的上下箭头，免得挤占本来就紧张的宽度 */
+.tpe-bar-w::-webkit-outer-spin-button,
+.tpe-bar-w::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
-.tpe-pop-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tpe-pop input[type="range"] {
-  flex: 1;
-  min-width: 0;
-}
-
-.tpe-pop input[type="number"] {
-  width: 58px;
+.tpe-bar-sep {
   flex: none;
-}
-
-.tpe-pop-actions {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--tpe-line);
 }
 
 /* ---------- 预设面板 ---------- */

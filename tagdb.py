@@ -240,6 +240,8 @@ class TagDB:
         self._by_cat = {}       # 分类号 → 按 count 降序
         self._by_name = {}      # 标签名 → TagEntry
         self._curated = {}      # fav/quality/neg → [TagEntry]
+        self._fav_base = []     # 内置「推荐」词（收藏会插到它前面）
+        self._favorites = []    # 用户收藏的标签名
 
     # -- 加载 ---------------------------------------------------------------
 
@@ -325,7 +327,56 @@ class TagDB:
             by_cat.setdefault(5, []).extend(extra)
 
         self._all, self._by_cat, self._by_name, self._curated = entries, by_cat, by_name, curated
+        self._fav_base = list(curated.get("fav", []))
         self._loaded = True
+
+    # -- 收藏 ---------------------------------------------------------------
+
+    @property
+    def favorites(self):
+        """当前使用的收藏列表（供路由层给结果打 fav 标记，不必再读一次文件）。"""
+        return list(self._favorites)
+
+    def set_favorites(self, names):
+        """把用户收藏的标签重建进 fav 分类（收藏排在内置推荐之前）。
+
+        每次收藏变动只重建这一个列表，不用重新加载 12 万条词库。
+        """
+        self.ensure_loaded()
+
+        wanted, seen = [], set()
+        for raw in names or []:
+            name = raw.strip() if isinstance(raw, str) else ""
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            wanted.append(name)
+            if len(wanted) >= 5000:
+                break
+
+        with self._lock:
+            self._favorites = wanted
+            self._rebuild_fav_locked()
+        return list(self._curated.get("fav", []))
+
+    def _rebuild_fav_locked(self):
+        lst, seen = [], set()
+        for name in self._favorites:
+            e = self._by_name.get(name)
+            if e is None:
+                # 词库里没有这条（用户手输的）也要能显示和点选，
+                # 造个临时条目即可，不进全量表，免得污染搜索。
+                e = TagEntry(name, 5, 0, "", "")
+            if e.name in seen:
+                continue
+            seen.add(e.name)
+            lst.append(e)
+        for e in self._fav_base:
+            if e.name in seen:
+                continue
+            seen.add(e.name)
+            lst.append(e)
+        self._curated["fav"] = lst
 
     # -- 查询 ---------------------------------------------------------------
 

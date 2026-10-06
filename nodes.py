@@ -12,6 +12,7 @@ import os
 
 from aiohttp import web
 
+from .favorites import get_favorites
 from .tagdb import get_tag_db, reload_tag_db
 
 try:
@@ -82,18 +83,34 @@ async def _ensure_loaded(db):
     return await asyncio.get_running_loop().run_in_executor(None, db.ensure_loaded)
 
 
+def _sync_favorites(db):
+    """把磁盘上的收藏同步进词库的「推荐」分类。
+
+    db.set_favorites 只在列表真的变了时才重建，所以每次请求调它的代价可以忽略。
+    """
+    fav = get_favorites(_PLUGIN_DIR)
+    names = fav.list()
+    db.ensure_loaded()
+    if names != db.favorites:
+        db.set_favorites(names)
+    return fav, set(names)
+
+
 async def _health(request):
     db = get_tag_db(_PLUGIN_DIR)
     ok = await _ensure_loaded(db)
+    fav, fav_set = _sync_favorites(db)
     data = db.stats()
     data["ok"] = ok
     data["hasMore"] = False
+    data["favorites"] = len(fav_set)
     return web.json_response(data)
 
 
 async def _categories(request):
     db = get_tag_db(_PLUGIN_DIR)
     await _ensure_loaded(db)
+    _sync_favorites(db)
     return web.json_response({
         "categories": db.categories(),
         "error": db.error,
@@ -103,6 +120,7 @@ async def _categories(request):
 async def _tags(request):
     db = get_tag_db(_PLUGIN_DIR)
     await _ensure_loaded(db)
+    _, fav_set = _sync_favorites(db)
 
     raw_cat = request.query.get("cat")
     cat = None
@@ -117,15 +135,62 @@ async def _tags(request):
         offset=request.query.get("offset", 0),
     )
     return web.json_response({
-        "items": [e.to_dict() for e in items],
+        "items": [dict(e.to_dict(), fav=e.name in fav_set) for e in items],
         "hasMore": more,
         "error": db.error,
+    })
+
+
+async def _favorites_get(request):
+    db = get_tag_db(_PLUGIN_DIR)
+    fav, fav_set = _sync_favorites(db)
+    names = sorted(fav_set)
+    return web.json_response({"tags": names, "count": len(names), "error": db.error})
+
+
+async def _favorites_post(request):
+    """收藏 / 取消收藏。body: {"action": "toggle"|"add"|"remove", "tag": "..."}"""
+    db = get_tag_db(_PLUGIN_DIR)
+    fav = get_favorites(_PLUGIN_DIR)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    tag = payload.get("tag") or payload.get("name") or ""
+    action = payload.get("action") or "toggle"
+    if not isinstance(tag, str) or not tag.strip():
+        return web.json_response(
+            {"ok": False, "error": "缺少 tag 参数", "tags": fav.list()}, status=400
+        )
+
+    loop = asyncio.get_running_loop()
+    if action == "add":
+        names = await loop.run_in_executor(None, fav.add, tag)
+        now = fav.has(tag)
+    elif action == "remove":
+        names = await loop.run_in_executor(None, fav.remove, tag)
+        now = False
+    else:
+        names, now = await loop.run_in_executor(None, fav.toggle, tag)
+
+    db.set_favorites(names)
+    return web.json_response({
+        "ok": True,
+        "fav": now,
+        "tag": tag.strip(),
+        "tags": sorted(names),
+        "count": len(names),
     })
 
 
 async def _reload(request):
     db = reload_tag_db(_PLUGIN_DIR)
     await _ensure_loaded(db)
+    _sync_favorites(db)
     data = db.stats()
     data["ok"] = bool(db.source)
     return web.json_response(data)
@@ -142,6 +207,8 @@ def _register_routes():
     routes.get("/tag_prompt_editor/health")(_health)
     routes.get("/tag_prompt_editor/categories")(_categories)
     routes.get("/tag_prompt_editor/tags")(_tags)
+    routes.get("/tag_prompt_editor/favorites")(_favorites_get)
+    routes.post("/tag_prompt_editor/favorites")(_favorites_post)
     routes.get("/tag_prompt_editor/reload")(_reload)
     _ROUTES_REGISTERED = True
 

@@ -32,13 +32,33 @@ ComfyUI 原生的提示词输入只有一个 `CLIPTextEncode` 的多行文本框
 
 ### 标签块区（对应 WebUI 的 tag 方块）
 
+鼠标移到标签块上，会浮出一条**操作工具条**（模仿 WebUI 的
+`sd-webui-prompt-all-in-one` 的 tag 面板）：
+
+```
+   ┌───┬─────┬───┬───┬───┬───┬───┬───┬───┐
+   │ − │ 1.4 │ + │ ( │ ) │ ★ │ ✎ │ ⊘ │ × │
+   └───┴─────┴───┴───┴───┴───┴───┴───┴───┘
+     权重步进     括号   收藏 编辑 禁用 删除
+```
+
 | 操作 | 交互 |
 | --- | --- |
-| 启用 / 禁用 | 单击标签文字（禁用的标签会灰掉并加删除线，但不从文本里删） |
-| 改权重 | 单击 `×1.2` 徽标 → 弹出滑块；滚轮微调 ±0.05；`Shift+滚轮` 按档位跳 |
-| 删除 | 点标签右侧的 `×` |
+| **编辑** | **单击**标签文字 → 原地输入（回车保存 / Esc 取消） |
+| **启用 / 禁用** | **双击**标签文字，或点工具条的 `⊘`。禁用后不参与输出，但保留在编辑器里 |
+| 改权重 | 工具条的 `−` `+` 按档位步进、输入框直接改；标签块上滚轮微调 ±0.05，`Shift+滚轮` 按档位 |
+| 括号 | 工具条的 `(` `)` = 权重 ×1.1 / ÷1.1（ComfyUI 里 `(tag)` 本身就是 ×1.1） |
+| 收藏 | 工具条的 `★`。收藏的标签会排到「推荐」分类最前面，并写进 `favorites.json` |
+| 删除 | 点标签右侧的 `×`，或工具条的 `×` |
 | 排序 | 按住标签块拖拽（HTML5 drag），落点有插入指示线 |
 | 批量 | 工具栏：`去重` / `排序`（字母序） / `权重归 1` / `清空` |
+
+> **工具条上为什么没有方括号按钮？** WebUI 用 `[tag]` 降权，但 ComfyUI 的
+> `parse_parentheses()` **只认圆括号** —— `[tag]` 会原样进 tokenizer 变成无效 token。
+> 所以「降权」统一走数值权重 `(tag:0.8)`，语义完全等价，也不会产出坏 prompt。
+
+单击与双击靠 **250 ms 判定窗口**区分（和 WebUI 那套一致）：单击后先等一下，
+确认没有第二下才进入编辑。
 
 权重档位沿 WebUI 习惯：`0.3 0.4 0.5 0.6 0.7 0.8 0.9 1 1.05 1.1 1.15 1.2 1.3 1.4 1.5 1.6 1.8 2`，
 走到两端会**饱和**而不是绕回去。权重为 `1` 时序列化成裸标签（不写括号），保持 prompt 干净。
@@ -113,12 +133,22 @@ TAG_PROMPT_EDITOR_TAGS_DIR=/path/to/tags
 | --- | --- | --- |
 | GET | `/tag_prompt_editor/health` | 词库统计：总数、带中文数、来源、加载错误 |
 | GET | `/tag_prompt_editor/categories` | tab 列表（id / 中文名 / 条数） |
-| GET | `/tag_prompt_editor/tags?q=&cat=&limit=60&offset=0` | 分页搜索，返回 `{items, hasMore}` |
+| GET | `/tag_prompt_editor/tags?q=&cat=&limit=60&offset=0` | 分页搜索，返回 `{items, hasMore}`，每项带 `fav` 标记 |
+| GET | `/tag_prompt_editor/favorites` | 收藏列表 `{tags, count}` |
+| POST | `/tag_prompt_editor/favorites` | body `{action: "toggle"\|"add"\|"remove", tag}` |
 | GET | `/tag_prompt_editor/reload` | 更新词库 CSV 后热重载，不用重启 ComfyUI |
 
 ```bash
 curl --noproxy '*' "http://127.0.0.1:8188/tag_prompt_editor/tags?q=长发&limit=5"
+
+curl --noproxy '*' -X POST -H "Content-Type: application/json" \
+  -d '{"action":"toggle","tag":"masterpiece"}' \
+  "http://127.0.0.1:8188/tag_prompt_editor/favorites"
 ```
+
+收藏数据存在插件目录的 `favorites.json`（已加进 `.gitignore`，不会提交）。
+写入用「临时文件 + `os.replace`」保证原子性，读到坏文件会退化成空列表 ——
+一个收藏文件不该把编辑器搞到打不开。
 
 ---
 
@@ -130,8 +160,10 @@ curl --noproxy '*' "http://127.0.0.1:8188/tag_prompt_editor/tags?q=长发&limit=
 | --- | --- | --- |
 | `dev/test_tag_core.mjs` | 前端纯逻辑（解析/序列化/权重/排序/去重） | 49 项 ✅ |
 | `dev/test_tagdb.py` | 词库加载、编码嗅探、分类、搜索排序、分页 | 73 项 ✅ |
-| `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 4 个路由 + STRING 透传 | 全过 ✅ |
-| `dev/ui_tag_editor.mjs` | Playwright 打开浏览器，点 tab / 卡片 / 权重气泡 / 拖拽 / 删除，截图 | 33 项 ✅ |
+| `dev/test_favorites.py` | 收藏读写、原子写入、坏文件容错、并发、fav 分类合并 | 47 项 ✅ |
+| `dev/e2e_tag_editor.py` | 起真实 ComfyUI 实例，验节点注册 + 6 个路由 + STRING 透传 | 全过 ✅ |
+| `dev/ui_tag_editor.mjs` | Playwright：结构恢复、工具条、拖拽、删除、编辑、搜索，截图 | 43 项 ✅ |
+| `dev/ui_tag_bar.mjs` | 工具条专项：悬停 / 权重 / 括号 / 收藏落盘 / 单击编辑 / 双击禁用 | 43 项 ✅ |
 | `dev/verify_resize.mjs` | 节点缩放自适应：拖文本框、拖宽、拖高、拖矮 + 功能回归 | 14 项 ✅ |
 | `dev/verify_git_eol.py` | 模拟 `git clone`，对比 CRLF 源文件与 LF 检出后的词库加载结果 | 27 项 ✅ |
 
@@ -199,9 +231,16 @@ E:/AI/ComfyUI-aki-v3/python/python.exe dev/e2e_tag_editor.py
   数据只存在 `text` 里，`widgets_values` 长度保持不变。
 - **DOM Widget 在 `onNodeCreated` 之后才异步初始化**，测试里要 `waitForFunction` 等
   `node.widgets.length` 就位，不能 `loadGraphData` 后立刻断言。
-- **浮层别放在 node 里**。权重气泡最初做在 DOM widget 内部，被后渲染的兄弟面板遮挡，
+- **浮层别放在 node 里**。工具条最初做在 DOM widget 内部，被后渲染的兄弟面板遮挡，
   还受 `Comfy.DOMClippingEnabled` 裁剪。改成挂到 `document.body` + `position: fixed; z-index: 10000`
   才彻底解决。
+- **浮层的内容要跟着状态刷新**。工具条是「悬停时构建一次」的，但收藏 / 禁用 / 权重都会变 ——
+  只在 `commit` 后重新定位的话，`★` 会一直停在旧状态（这个 bug 就是被 `dev/ui_tag_bar.mjs` 抓出来的）。
+  用一串签名（`名称|权重|启用|收藏`）比对，变了才重建 DOM，既保证刷新又不至于每次编辑都闪。
+- **浏览器测试有加载时序竞态**。页面自己也会加载一遍默认工作流，可能**晚于**
+  测试里的 `loadGraphData` 完成，把它刚塞进去的节点顶掉 —— 表现为随机超时、且看节点类型
+  会全是 `SaveImage`/`KSampler` 这些默认节点。`dev/*.mjs` 统一用「重试到真的出现
+  `TagPromptEditor` 为止」来消除，不要只等 `app.graph` 就绪就往下跑。
 - **`WEB_DIRECTORY` 只在 `__init__.py` 里声明**，pyproject.toml 里**不要**写 `[tool.comfy] web`。
   两边都写会让 ComfyUI 按「模块名」和「project.name」各注册一次，JS 被导入两遍。
 - **排查这类前端问题的有效手法**：给可疑属性装 `defineProperty` setter 抓调用栈。

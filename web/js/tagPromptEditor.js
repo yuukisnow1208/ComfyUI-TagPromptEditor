@@ -136,9 +136,14 @@ function setupEditor(node) {
     fetching: null,
     searchTimer: null,
     chipHeight: 78,
-    pop: null,
-    popTag: null,
-    popIndex: -1,
+    bar: null,           // 悬停工具条（挂在 document.body 上）
+    barTag: null,        // 工具条当前对应的 tag 对象
+    barIndex: -1,
+    barSig: "",          // 工具条内容的签名，状态变了才重建按钮
+    barHideTimer: null,
+    clickTimer: null,    // 用来区分单击（编辑）与双击（禁用）
+    editingIndex: -1,    // 正在原地编辑的 chip 下标
+    favSet: new Set(),   // 已收藏的标签名
     dragFrom: -1,
     observer: null,
     lastSynced: null,
@@ -221,6 +226,7 @@ function setupEditor(node) {
   // ---- 事件绑定 ----
   wireSearch(st);
   wireTabs(st);
+  loadFavorites(st);
 
   // ---- 初始状态 ----
   pullFromText(st);
@@ -262,6 +268,7 @@ function syncHeight(st) {
 function pullFromText(st) {
   st.tags = Core.parsePrompt(st.textWidget.value || "");
   st.lastSynced = st.textWidget.value;
+  st.editingIndex = -1;   // 文本框被外部改动时，退出原地编辑态
   renderChips(st);
 }
 
@@ -304,31 +311,65 @@ function renderChips(st) {
     chip.className = "tpe-chip";
     chip.draggable = true;
     if (!tag.on) chip.classList.add("tpe-off");
+    if (st.favSet.has(tag.t)) chip.classList.add("tpe-fav");
+    if (st.editingIndex === index) chip.classList.add("tpe-editing");
     if (tag.bracket) {
       chip.classList.add("tpe-bracket");
       chip.title = "方括号写法：ComfyUI 不支持 [tag] 降权，方括号会原样进编码器。要降权请用 (tag:0.8)";
     }
 
-    const label = document.createElement("span");
-    label.className = "tpe-chip-label";
-    label.textContent = tag.t;
-    label.title = "点击启用 / 禁用（禁用只是不参与输出，不会删除）";
-    label.addEventListener("click", (e) => {
-      e.stopPropagation();
-      tag.on = !tag.on;
-      commit(st);
+    // ---- 悬停 -> 工具条（正在编辑时不打扰）----
+    chip.addEventListener("mouseenter", () => {
+      if (st.editingIndex !== -1) return;
+      showBar(st, index);
     });
+    chip.addEventListener("mouseleave", () => scheduleHideBar(st));
+
+    // ---- 标签名 / 原地编辑框 ----
+    if (st.editingIndex === index) {
+      chip.draggable = false;
+      chip.appendChild(buildEditInput(st, index, tag));
+    } else {
+      const label = document.createElement("span");
+      label.className = "tpe-chip-label";
+      label.textContent = tag.t;
+      label.title = "单击编辑 · 双击禁用/启用（禁用只是不参与输出，不会删除）";
+      // 单击 = 编辑，双击 = 禁用/启用。单击必须先等一下，确认不是双击的第一下。
+      // 这与 WebUI 的 sd-webui-prompt-all-in-one 是同一套 250ms 判定。
+      label.addEventListener("click", (e) => {
+        e.stopPropagation();
+        clearTimeout(st.clickTimer);
+        st.clickTimer = setTimeout(() => {
+          st.clickTimer = null;
+          beginEdit(st, index);
+        }, 250);
+      });
+      label.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        clearTimeout(st.clickTimer);
+        st.clickTimer = null;
+        tag.on = !tag.on;
+        commit(st);
+      });
+      chip.appendChild(label);
+    }
 
     const weight = document.createElement("span");
     weight.className = "tpe-chip-w";
     if (tag.w > 1) weight.classList.add("tpe-w-up");
     else if (tag.w < 1) weight.classList.add("tpe-w-down");
     weight.textContent = Core.formatWeight(tag.w);
-    weight.title = "点击打开权重滑块（滚轮微调 0.05，Shift+滚轮按档位调）";
+    weight.title = "点击打开工具条（chip 上滚轮 = 微调 0.05，Shift+滚轮 = 按档位调）";
     weight.addEventListener("click", (e) => {
       e.stopPropagation();
-      st.popIndex = index;
-      openWeightPop(st, chip, tag);
+      clearTimeout(st.clickTimer);
+      st.clickTimer = null;
+      showBar(st, index);
+      const box = st.bar?.querySelector(".tpe-bar-w");
+      if (box) {
+        box.focus();
+        box.select();
+      }
     });
 
     const del = document.createElement("span");
@@ -337,11 +378,12 @@ function renderChips(st) {
     del.title = "删除这个标签";
     del.addEventListener("click", (e) => {
       e.stopPropagation();
+      hideBar(st);
       st.tags.splice(index, 1);
       commit(st);
     });
 
-    chip.append(label, weight, del);
+    chip.append(weight, del);
 
     chip.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -383,22 +425,24 @@ function renderChips(st) {
 
   renderToolbar(st);
   renderWarn(st);
-  reanchorPop(st);
+  reanchorBar(st);
   syncHeight(st);
 }
 
-/** 重渲染标签块后，把还开着的权重气泡重新贴回原来那个标签块上。
- *  （气泡挂在 wrap 上，不会被 box.innerHTML 清掉，所以只需要重新定位。） */
-function reanchorPop(st) {
-  if (!st.pop) return;
-  const chip = st.chipBox.children[st.popIndex];
-  if (!chip || st.popIndex >= st.tags.length) {
-    st.pop.remove();
-    st.pop = null;
-    st.popIndex = -1;
+/** 重渲染标签块后，把还开着的工具条重新贴回原来那个标签块上。
+ *  工具条挂在 document.body 上，不会被 box.innerHTML 清掉，所以只需重新定位。 */
+function reanchorBar(st) {
+  if (!st.bar) return;
+  const tag = st.barTag;
+  const idx = tag ? st.tags.indexOf(tag) : -1;
+  if (idx < 0) {
+    hideBar(st);
     return;
   }
-  positionPop(st, chip);
+  st.barIndex = idx;
+  // 状态变了（收藏 / 禁用 / 权重）就重建按钮内容，否则只挪位置
+  if (tag && st.barSig !== barSignature(st, tag)) fillBar(st, tag);
+  else positionBar(st, idx);
 }
 
 function renderToolbar(st) {
@@ -447,91 +491,309 @@ function renderWarn(st) {
 // 权重气泡
 // ---------------------------------------------------------------------------
 
-function openWeightPop(st, chip, tag) {
-  st.pop?.remove();
-  st.pop = null;
+// ---------------------------------------------------------------------------
+// 悬停工具条
+//
+// 模仿 sd-webui-prompt-all-in-one 的 tag 操作条：鼠标移到标签块上就浮出来，
+// 权重增减、括号增删、收藏、编辑、禁用、删除都在这里。
+//
+// 两个刻意的取舍：
+// - 挂 document.body + position:fixed，不放在节点里 —— 否则会被后渲染的预设面板
+//   盖住，还会被 Comfy.DOMClippingEnabled 裁掉。
+// - **不做方括号按钮**。WebUI 用 [tag] 降权，但 ComfyUI 的 parse_parentheses()
+//   只认圆括号，[tag] 会原样进 tokenizer 变成无效 token。所以「降权」统一走
+//   数值权重 (tag:0.8)，语义完全等价。
+// ---------------------------------------------------------------------------
 
-  const pop = document.createElement("div");
-  pop.className = "tpe-pop";
-  pop.addEventListener("pointerdown", (e) => e.stopPropagation());
+const BAR_SPECS = [
+  { act: "dec", text: "−", title: "权重降一档" },
+  { act: "w" },
+  { act: "inc", text: "+", title: "权重升一档" },
+  { sep: true },
+  { act: "paren-add", text: "(", title: "加一层圆括号（×1.1）" },
+  { act: "paren-del", text: ")", title: "去一层圆括号（÷1.1）" },
+  { sep: true },
+  { act: "fav" },
+  { act: "edit", text: "✎", title: "编辑标签文本" },
+  { act: "toggle" },
+  { act: "del", text: "×", title: "删除这个标签" },
+];
 
-  const title = document.createElement("div");
-  title.className = "tpe-pop-title";
-  title.textContent = tag.t;
+function showBar(st, index) {
+  const tag = st.tags[index];
+  if (!tag) return;
+  clearTimeout(st.barHideTimer);
 
-  const row = document.createElement("div");
-  row.className = "tpe-pop-row";
-  const range = document.createElement("input");
-  range.type = "range";
-  range.min = "0.1";
-  range.max = "2";
-  range.step = "0.05";
-  range.value = String(tag.w);
-  const num = document.createElement("input");
-  num.type = "number";
-  num.min = String(Core.WEIGHT_MIN);
-  num.max = String(Core.WEIGHT_MAX);
-  num.step = "0.05";
-  num.value = Core.formatWeight(tag.w);
-  row.append(range, num);
-
-  const actions = document.createElement("div");
-  actions.className = "tpe-pop-actions";
-  for (const preset of [0.5, 0.8, 1, 1.2, 1.5]) {
-    const b = document.createElement("button");
-    b.className = "tpe-btn";
-    b.textContent = String(preset);
-    b.addEventListener("click", () => {
-      tag.w = preset;
-      commit(st);
-      openWeightPop(st, chip, tag);
-    });
-    actions.appendChild(b);
+  if (!st.bar) {
+    st.bar = document.createElement("div");
+    st.bar.className = "tpe-bar";
+    for (const ev of ["pointerdown", "mousedown", "click", "dblclick", "wheel"]) {
+      st.bar.addEventListener(ev, (e) => e.stopPropagation(),
+        { passive: ev === "wheel" ? false : true });
+    }
+    st.bar.addEventListener("mouseenter", () => clearTimeout(st.barHideTimer));
+    st.bar.addEventListener("mouseleave", () => scheduleHideBar(st));
+    document.body.appendChild(st.bar);
   }
 
-  const sync = (v) => {
-    tag.w = Core.clampWeight(v);
-    commit(st);
-    const txt = Core.formatWeight(tag.w);
-    range.value = String(tag.w);
-    if (num.value !== txt) num.value = txt;
-  };
-  range.addEventListener("input", () => sync(range.value));
-  num.addEventListener("change", () => sync(num.value));
-
-  pop.append(title, row, actions);
-  // 挂到 body 而不是节点内部：DOM widget 会被后面渲染的预设面板盖住，
-  // 而且 Comfy.DOMClippingEnabled 打开时还会被裁掉。
-  document.body.appendChild(pop);
-  st.pop = pop;
-  st.popTag = tag;
-  positionPop(st, chip);
-
-  const close = (e) => {
-    if (pop.contains(e.target)) return;
-    pop.remove();
-    if (st.pop === pop) {
-      st.pop = null;
-      st.popTag = null;
-      st.popIndex = -1;
-    }
-    document.removeEventListener("pointerdown", close, true);
-  };
-  setTimeout(() => document.addEventListener("pointerdown", close, true), 0);
+  st.barTag = tag;
+  fillBar(st, tag);
 }
 
-/** 把气泡贴到标签块下方（视口坐标，越界就翻到上方 / 夹进屏幕内）。 */
-function positionPop(st, chip) {
-  const pop = st.pop;
-  if (!pop || !chip.isConnected) return;
+/** 工具条内容随标签状态变化（收藏 / 禁用 / 权重），用签名比对，
+ *  变了才重建 —— 既保证状态按钮（★/⊘）及时刷新，又避免每次 commit 都闪一下。 */
+function barSignature(st, tag) {
+  return `${tag.t}|${tag.w}|${tag.on}|${st.favSet.has(tag.t)}`;
+}
+
+function fillBar(st, tag) {
+  const bar = st.bar;
+  if (!bar) return;
+  const index = st.tags.indexOf(tag);
+  if (index < 0) {
+    hideBar(st);
+    return;
+  }
+  bar.innerHTML = "";
+  st.barTag = tag;
+  st.barIndex = index;
+  st.barSig = barSignature(st, tag);
+
+  for (const spec of BAR_SPECS) {
+    if (spec.sep) {
+      const sep = document.createElement("span");
+      sep.className = "tpe-bar-sep";
+      bar.appendChild(sep);
+      continue;
+    }
+
+    if (spec.act === "w") {
+      const input = document.createElement("input");
+      input.type = "number";
+      input.className = "tpe-bar-w";
+      input.min = String(Core.WEIGHT_MIN);
+      input.max = String(Core.WEIGHT_MAX);
+      input.step = "0.05";
+      input.value = Core.formatWeight(tag.w);
+      input.title = `直接输入权重（${Core.WEIGHT_MIN} ~ ${Core.WEIGHT_MAX}）`;
+      input.addEventListener("change", () => {
+        tag.w = Core.clampWeight(input.value);
+        commit(st);
+        input.value = Core.formatWeight(tag.w);
+      });
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") input.blur();
+        else if (e.key === "Escape") {
+          input.value = Core.formatWeight(tag.w);
+          input.blur();
+        }
+      });
+      bar.appendChild(input);
+      continue;
+    }
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tpe-bar-btn";
+    btn.dataset.act = spec.act;
+
+    // 状态型按钮要反映当前状态
+    if (spec.act === "fav") {
+      const on = st.favSet.has(tag.t);
+      btn.textContent = on ? "★" : "☆";
+      btn.classList.toggle("tpe-on", on);
+      btn.title = on ? "取消收藏" : "收藏这个标签";
+    } else if (spec.act === "toggle") {
+      btn.textContent = tag.on ? "⊘" : "↺";
+      btn.classList.toggle("tpe-on", !tag.on);
+      btn.title = tag.on ? "禁用（不参与输出，但不删除）" : "重新启用";
+    } else {
+      btn.textContent = spec.text;
+      btn.title = spec.title || "";
+    }
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      barAction(st, spec.act, st.tags.indexOf(tag));
+    });
+    bar.appendChild(btn);
+  }
+
+  positionBar(st, index);
+}
+
+function barAction(st, act, index) {
+  const tag = st.tags[index];
+  if (!tag) {
+    hideBar(st);
+    return;
+  }
+  switch (act) {
+    case "dec":
+      tag.w = Core.stepWeight(tag.w, -1);
+      commit(st);
+      break;
+    case "inc":
+      tag.w = Core.stepWeight(tag.w, 1);
+      commit(st);
+      break;
+    case "paren-add":
+      // ComfyUI 里 (tag) 就是 ×1.1，所以「加一层括号」等价于权重乘 1.1。
+      // 用显式数值而不是真的套括号：序列化更干净，也不会越套越多层。
+      tag.w = Core.clampWeight(tag.w * 1.1);
+      commit(st);
+      break;
+    case "paren-del":
+      tag.w = Core.clampWeight(tag.w / 1.1);
+      commit(st);
+      break;
+    case "fav":
+      toggleFavorite(st, tag);
+      break;
+    case "edit":
+      beginEdit(st, index);
+      break;
+    case "toggle":
+      tag.on = !tag.on;
+      commit(st);
+      break;
+    case "del":
+      hideBar(st);
+      st.tags.splice(index, 1);
+      commit(st);
+      break;
+    default:
+      break;
+  }
+}
+
+function scheduleHideBar(st) {
+  clearTimeout(st.barHideTimer);
+  st.barHideTimer = setTimeout(() => hideBar(st), 180);
+}
+
+function hideBar(st) {
+  clearTimeout(st.barHideTimer);
+  st.barHideTimer = null;
+  st.bar?.remove();
+  st.bar = null;
+  st.barTag = null;
+  st.barIndex = -1;
+  st.barSig = "";
+}
+
+/** 把工具条贴到标签块上方（顶不下就翻到下方 / 夹进视口）。 */
+function positionBar(st, index) {
+  const bar = st.bar;
+  if (!bar) return;
+  const chip = st.chipBox.children[index];
+  if (!chip || !chip.isConnected) return;
   const cr = chip.getBoundingClientRect();
-  const pw = pop.offsetWidth;
-  const ph = pop.offsetHeight;
-  let left = Math.min(Math.max(4, cr.left), Math.max(4, window.innerWidth - pw - 4));
-  let top = cr.bottom + 6;
-  if (top + ph > window.innerHeight - 4) top = Math.max(4, cr.top - ph - 6);
-  pop.style.left = `${left}px`;
-  pop.style.top = `${top}px`;
+  const bw = bar.offsetWidth;
+  const bh = bar.offsetHeight;
+  const maxLeft = Math.max(4, window.innerWidth - bw - 4);
+  const left = Math.min(Math.max(4, cr.left + cr.width / 2 - bw / 2), maxLeft);
+  // 默认放在标签块上方 —— 跟 WebUI 一致，也不会盖住下面的预设面板
+  let top = cr.top - bh - 6;
+  if (top < 4) top = Math.min(cr.bottom + 6, Math.max(4, window.innerHeight - bh - 4));
+  bar.style.left = `${left}px`;
+  bar.style.top = `${top}px`;
+}
+
+// ---------------------------------------------------------------------------
+// 原地编辑标签
+// ---------------------------------------------------------------------------
+
+function beginEdit(st, index) {
+  if (!st.tags[index]) return;
+  hideBar(st);
+  clearTimeout(st.clickTimer);
+  st.clickTimer = null;
+  st.editingIndex = index;
+  renderChips(st);
+  const el = st.chipBox.querySelector(".tpe-chip-input");
+  if (el) {
+    el.focus();
+    el.select();
+  }
+}
+
+function buildEditInput(st, index, tag) {
+  const input = document.createElement("input");
+  input.className = "tpe-chip-input";
+  input.type = "text";
+  input.spellcheck = false;
+  input.value = tag.t;
+  input.title = "回车保存 · Esc 取消";
+
+  let done = false;
+  const finish = (save) => {
+    if (done) return;       // commit 会重建 DOM 触发 blur，靠这个防重入
+    done = true;
+    st.editingIndex = -1;
+    const next = input.value.trim();
+    if (save && next && next !== tag.t) {
+      tag.t = next;
+      tag.bracket = /^\[.+\]$/.test(next);
+    }
+    commit(st);
+  };
+
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();    // 别让 ComfyUI 抢走键盘（Delete/Backspace 会删掉整个节点）
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  for (const ev of ["pointerdown", "mousedown", "click", "dblclick", "dragstart"]) {
+    input.addEventListener(ev, (e) => e.stopPropagation());
+  }
+  return input;
+}
+
+// ---------------------------------------------------------------------------
+// 收藏
+// ---------------------------------------------------------------------------
+
+async function loadFavorites(st) {
+  try {
+    const res = await api.fetchApi(`${API_BASE}/favorites`);
+    const data = await res.json();
+    st.favSet = new Set(data.tags || []);
+    renderChips(st);
+  } catch {
+    // 收藏拿不到不该影响编辑，静默跳过
+  }
+}
+
+async function toggleFavorite(st, tag) {
+  const name = tag.t;
+  const was = st.favSet.has(name);
+  // 先改本地状态：点击立刻有视觉反馈，请求失败再回滚
+  if (was) st.favSet.delete(name);
+  else st.favSet.add(name);
+  commit(st);
+
+  try {
+    const res = await api.fetchApi(`${API_BASE}/favorites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "toggle", tag: name }),
+    });
+    const data = await res.json();
+    if (data && Array.isArray(data.tags)) st.favSet = new Set(data.tags);
+  } catch {
+    if (was) st.favSet.add(name);
+    else st.favSet.delete(name);
+  }
+  commit(st);
+  refreshGrid(st, false);   // 收藏会改变「推荐」分类的计数
 }
 
 // ---------------------------------------------------------------------------
@@ -704,7 +966,8 @@ app.registerExtension({
         st.observer?.disconnect();
         st.fetching?.abort();
         clearTimeout(st.searchTimer);
-        st.pop?.remove();
+        clearTimeout(st.clickTimer);
+        hideBar(st);          // 工具条挂在 body 上，不清掉会留在页面上
         this.__tpe = null;
       }
       return onRemoved?.apply(this, arguments);
