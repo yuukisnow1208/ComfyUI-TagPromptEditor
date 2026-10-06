@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""全量 Danbooru 标签库：加载 / 中英合并 / 搜索索引。
+"""全量 Danbooru 标签库：加载 / 中英合并 / 语义分类 / 搜索索引。
 
 数据沿用 a1111-sd-webui-tagcomplete 的 CSV 格式，直接把文件丢进
 ``<插件目录>/tags/`` 即可，也可以指向已有的 SD WebUI 安装目录：
@@ -10,6 +10,10 @@
 关于编码：``danbooru.csv`` 里含日文别名，实际是 **GB18030** 而不是 UTF-8；
 中文表才是 UTF-8。所以读取时统一做「UTF-8 优先、失败退 GB18030」的嗅探，
 不要写死编码，否则会直接 UnicodeDecodeError。
+
+分类：CSV 只带一个 category 号（0 通用 / 1 画师 / 3 作品 / 4 角色 / 5 元数据），
+通用类里挤了 2.8 万条没法用。加载后交给 :mod:`taxonomy` 给每条打一个三级
+语义路径，并建立「路径前缀 -> 标签列表」索引，供 UI 的分级筛选查。
 
 本模块刻意不依赖 ComfyUI，可脱离环境单独跑单测（见 dev/test_tagdb.py）。
 """
@@ -22,6 +26,11 @@ import glob
 import io
 import os
 import threading
+
+try:                     # 作为包导入（ComfyUI 正常加载路径）
+    from . import taxonomy
+except ImportError:      # 单测里直接 import tagdb 时走这条
+    import taxonomy
 
 __all__ = ["TagDB", "CATEGORY_NAMES", "get_tag_db", "reload_tag_db"]
 
@@ -109,11 +118,17 @@ NEGATIVE_TAGS = (
     "logo", "copyright_name", "dated", "patreon_username",
 )
 
+# 「推荐」是跨语义的精选列表（内置推荐 + 用户收藏），作为独立的虚拟分类栏，
+# 不参与 taxonomy 的语义分类。
+#
+# 质量词 / 负面**不再**走 CURATED：原来 QUALITY_TAGS 里混着 low_quality、
+# worst_quality 这种明显该算负面的词，两处定义会打架。现在统一由 taxonomy
+# 分类，这里只保留词表用于「词库里没有时补虚拟条目」。
 CURATED = {
     "fav": ("推荐", FAVORITE_TAGS),
-    "quality": ("质量词", QUALITY_TAGS),
-    "neg": ("负面", NEGATIVE_TAGS),
 }
+
+VIRTUAL_TAGS = tuple(QUALITY_TAGS) + tuple(NEGATIVE_TAGS)
 
 
 def _read_text(path: str) -> str:
@@ -201,7 +216,7 @@ def discover_tag_dirs(plugin_dir: str):
 class TagEntry:
     """一条标签。用 __slots__ 省内存 —— 12 万条时差别很明显。"""
 
-    __slots__ = ("name", "cat", "count", "zh", "blob", "nl")
+    __slots__ = ("name", "cat", "count", "zh", "blob", "nl", "path")
 
     def __init__(self, name: str, cat: int, count: int, zh: str, aliases: str):
         self.name = name
@@ -209,6 +224,8 @@ class TagEntry:
         self.count = count
         self.zh = zh
         self.nl = name.lower()
+        # 三级语义分类路径，加载完成后由 taxonomy.classify 填入
+        self.path = ()
         # 搜索用的小写大杂烩：英文名 / 下划线转空格后的名字 / 中文 / 别名。
         # 存成一份是为了避免每次搜索重复做字符串拼接。
         parts = [name, name.replace("_", " ")]
@@ -239,9 +256,12 @@ class TagDB:
         self._all = []          # 全量，按 count 降序
         self._by_cat = {}       # 分类号 → 按 count 降序
         self._by_name = {}      # 标签名 → TagEntry
-        self._curated = {}      # fav/quality/neg → [TagEntry]
+        self._by_prefix = {}    # 语义路径前缀 → 按 count 降序
+        self._curated = {}      # fav → [TagEntry]
         self._fav_base = []     # 内置「推荐」词（收藏会插到它前面）
         self._favorites = []    # 用户收藏的标签名
+        self._tree = []         # 分类树（含每级条数），供 /categories 用
+        self._cat3 = set()      # 作品名集合（含 X_(series) 的短名）
 
     # -- 加载 ---------------------------------------------------------------
 
@@ -267,6 +287,12 @@ class TagDB:
                 f"{os.path.join(self.plugin_dir, 'tags')}，"
                 f"或设置环境变量 {ENV_TAGS_DIR} 指向词库目录。"
             )
+            # 没有词库也不能让「推荐」栏空着 —— 内置推荐词是硬编码的，照常可用
+            self._curated = {
+                "fav": [TagEntry(n, 5, 0, "", "") for n in FAVORITE_TAGS]
+            }
+            self._fav_base = list(self._curated["fav"])
+            self._tree = self._build_tree_locked()
             self._loaded = True
             return
 
@@ -303,32 +329,65 @@ class TagDB:
             by_name[name] = e
 
         entries.sort(key=lambda e: e.count, reverse=True)
+
+        # 精选词表里有、danbooru 词表里没有的（质量词等）补成虚拟条目。
+        # 它们也要进全量表，否则全局搜 "masterpiece" 根本搜不到它本人
+        # （会被 world_masterpiece_theater 这类长尾抢走）。count=0 自然排在末尾。
+        extra = []
+        for n in list(FAVORITE_TAGS) + list(VIRTUAL_TAGS):
+            if n not in by_name:
+                e = TagEntry(n, 5, 0, zh_map.get(n, ""), "")
+                by_name[n] = e
+                extra.append(e)
+        if extra:
+            entries = entries + extra
+
+        # --- 语义分类：给每条 tag 打三级路径 ---
+        # 角色要按所属作品归小类，先收集作品名集合（danbooru category 3）。
+        # 作品 tag 常带消歧后缀（fate_(series)），而角色后缀只写 (fate)，
+        # 所以把短名也注册进去 —— 否则近一半角色匹配不上作品。
+        cat3 = {e.nl for e in entries if e.cat == 3}
+        cat3 |= {e.nl.split("_(")[0] for e in entries
+                 if e.cat == 3 and "_(" in e.nl}
+        self._cat3 = cat3          # 留给测试断言「角色挂的作品确实是作品」
+        for e in entries:
+            e.path = taxonomy.classify(e.name, e.cat, cat3, e.count)
+
         by_cat = {c: [] for c in CATEGORY_NAMES}
         for e in entries:
             by_cat.setdefault(e.cat, []).append(e)
 
-        curated = {}
-        extra = []          # 精选词表里有、danbooru 词表里没有的（质量词等）
-        for key, (_, names) in CURATED.items():
-            lst = []
-            for n in names:
-                e = by_name.get(n)
-                if e is None:
-                    e = TagEntry(n, 5, 0, zh_map.get(n, ""), "")
-                    by_name[n] = e
-                    extra.append(e)
-                lst.append(e)
-            curated[key] = lst
+        # 路径前缀索引：任意前缀（"服饰" / "服饰/上衣"）→ 标签列表。
+        # entries 已按 count 降序，顺序 append 即可保证每个桶内也是降序。
+        by_prefix = {}
+        for e in entries:
+            p = e.path
+            for i in range(1, len(p) + 1):
+                by_prefix.setdefault(p[:i], []).append(e)
 
-        # 这些也要进全量表，否则全局搜 "masterpiece" 根本搜不到它本人
-        # （会被 world_masterpiece_theater 这类长尾抢走）。count=0 所以自然排在末尾。
-        if extra:
-            entries = entries + extra
-            by_cat.setdefault(5, []).extend(extra)
+        curated = {"fav": [by_name[n] for n in FAVORITE_TAGS if n in by_name]}
 
-        self._all, self._by_cat, self._by_name, self._curated = entries, by_cat, by_name, curated
+        self._all, self._by_cat, self._by_name = entries, by_cat, by_name
+        self._curated, self._by_prefix = curated, by_prefix
         self._fav_base = list(curated.get("fav", []))
+        self._tree = self._build_tree_locked()
         self._loaded = True
+
+    # -- 分类树 -------------------------------------------------------------
+
+    def _build_tree_locked(self):
+        """把「路径 → 条数」交给 taxonomy.build_tree，并在最前面插入「推荐」。"""
+        counts = {}
+        for e in self._all:
+            counts[e.path] = counts.get(e.path, 0) + 1
+        tree = taxonomy.build_tree(counts)
+        tree.insert(0, {
+            "id": "fav",
+            "name": "推荐",
+            "count": len(self._curated.get("fav", [])),
+            "children": [],
+        })
+        return tree
 
     # -- 收藏 ---------------------------------------------------------------
 
@@ -357,6 +416,9 @@ class TagDB:
         with self._lock:
             self._favorites = wanted
             self._rebuild_fav_locked()
+            # 分类树里的「推荐」节点条数要跟着变，否则 UI 上的数字是旧的
+            if self._tree and self._tree[0].get("id") == "fav":
+                self._tree[0]["count"] = len(self._curated.get("fav", []))
         return list(self._curated.get("fav", []))
 
     def _rebuild_fav_locked(self):
@@ -386,10 +448,22 @@ class TagDB:
 
     def stats(self):
         self.ensure_loaded()
+        n_nodes = 0
+
+        def walk(nodes):
+            nonlocal n_nodes
+            for n in nodes:
+                n_nodes += 1
+                walk(n.get("children") or [])
+
+        walk(self._tree)
         return {
             "total": len(self._all),
             "with_zh": sum(1 for e in self._all if e.zh),
             "categories": {str(c): len(v) for c, v in self._by_cat.items()},
+            "taxonomy_nodes": n_nodes,
+            "taxonomy_l1": len(self._tree),
+            "unclassified": len(self._by_prefix.get(("其它",), [])),
             "source": self.source,
             "zh_source": self.zh_source,
             "search_dirs": self._dirs,
@@ -397,17 +471,9 @@ class TagDB:
         }
 
     def categories(self):
+        """分类树，供 UI 的分级胶囊用。每个节点是 id / name / count / children。"""
         self.ensure_loaded()
-        out = []
-        for key, (label, _) in CURATED.items():
-            out.append({"id": key, "name": label, "count": len(self._curated.get(key, []))})
-        for c in CATEGORY_ORDER:
-            lst = self._by_cat.get(c) or []
-            if not lst:
-                continue
-            out.append({"id": c, "name": CATEGORY_NAMES[c], "count": len(lst)})
-        out.append({"id": "all", "name": "全部", "count": len(self._all)})
-        return out
+        return self._tree
 
     def search(self, q: str = "", cat=None, limit: int = 60, offset: int = 0):
         """返回 (items, has_more)。
@@ -433,15 +499,21 @@ class TagDB:
         except (TypeError, ValueError):
             offset = 0
 
-        if cat in CURATED:
-            base = self._curated.get(cat, [])
-        elif cat is None or cat == "all" or cat == "":
+        cat_key = str(cat).strip() if cat is not None else ""
+        if cat_key in CURATED:
+            base = self._curated.get(cat_key, [])
+        elif not cat_key or cat_key == "all":
             base = self._all
         else:
-            try:
-                base = self._by_cat.get(int(cat), [])
-            except (TypeError, ValueError):
-                base = self._all
+            # 分类路径："服饰" / "服饰/上衣" / "面部/头发/长发"
+            path = tuple(seg for seg in cat_key.split("/") if seg)
+            base = self._by_prefix.get(path)
+            if base is None:
+                # 兼容旧的数字分类号（cat=0/4/3/1/5）
+                try:
+                    base = self._by_cat.get(int(cat_key), [])
+                except (TypeError, ValueError):
+                    base = []
 
         if not q:
             page = base[offset:offset + limit]

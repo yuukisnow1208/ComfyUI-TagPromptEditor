@@ -24,7 +24,6 @@ const PANEL_MIN = 200;      // 节点被压矮时面板最多缩到这
 const PANEL_MAX = 1200;     // 节点被拉高时面板最多涨到这
 const PAGE_SIZE = 120;      // 一次拉多少条
 const SEARCH_DEBOUNCE = 160;
-const CURATED = new Set(["fav", "quality", "neg"]);
 
 let styleInjected = false;
 function injectStyle() {
@@ -126,10 +125,11 @@ function setupEditor(node) {
     warnBar: null,
     panel: null,
     searchEl: null,
-    tabsEl: null,
+    catsEl: null,
     gridEl: null,
     statusEl: null,
-    tab: "fav",
+    tree: [],            // 分类树（从 /categories 拉，含每级条数）
+    path: ["fav"],       // 当前分类路径，用节点 id 拼：["服饰"] / ["服饰","上衣"]
     query: "",
     items: [],
     hasMore: false,
@@ -188,12 +188,12 @@ function setupEditor(node) {
       <input class="tpe-search" type="search" spellcheck="false" />
       <span class="tpe-status"></span>
     </div>
-    <div class="tpe-tabs"></div>
+    <div class="tpe-cats"></div>
     <div class="tpe-grid"></div>`;
   st.panel = panel;
   st.searchEl = panel.querySelector(".tpe-search");
   st.statusEl = panel.querySelector(".tpe-status");
-  st.tabsEl = panel.querySelector(".tpe-tabs");
+  st.catsEl = panel.querySelector(".tpe-cats");
   st.gridEl = panel.querySelector(".tpe-grid");
   st.searchEl.placeholder = "搜索标签，支持中文（长发 / miku / 微笑）";
 
@@ -225,7 +225,7 @@ function setupEditor(node) {
 
   // ---- 事件绑定 ----
   wireSearch(st);
-  wireTabs(st);
+  wireCats(st);
   loadFavorites(st);
 
   // ---- 初始状态 ----
@@ -828,28 +828,78 @@ function wireSearch(st) {
   st.searchEl.addEventListener("pointerdown", (e) => e.stopPropagation());
 }
 
-function wireTabs(st) {
+// ---------------------------------------------------------------------------
+// 分类栏：分级胶囊
+//
+// 分类树是「大类 → 小类 → 细类」三层（如 服饰 → 裤装 → 牛仔裤）。
+// UI 采用「一行一级」：第一行是大类，选中后再出一行小类，还有下钻再出一行。
+// 这样既容得下 20 多个大类，也不必为了层级多写一个下拉控件。
+// 路径上的每一段都用节点 id 拼（中文名，如 "服饰/上衣"），后端按前缀查。
+// ---------------------------------------------------------------------------
+
+function wireCats(st) {
   loadCategories().then((data) => {
-    st.tabsEl.innerHTML = "";
-    for (const cat of data.categories || []) {
-      const btn = document.createElement("button");
-      btn.className = "tpe-tab";
-      btn.dataset.cat = String(cat.id);
-      btn.textContent = `${cat.name}`;
-      btn.title = `${cat.count} 个标签`;
-      if (String(cat.id) === String(st.tab)) btn.classList.add("tpe-active");
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        st.tab = cat.id;
-        st.tabsEl.querySelectorAll(".tpe-tab").forEach((b) => b.classList.remove("tpe-active"));
-        btn.classList.add("tpe-active");
-        refreshGrid(st, false);
-      });
-      st.tabsEl.appendChild(btn);
-    }
+    st.tree = data.categories || [];
+    renderCats(st);
     if (data.error) setStatus(st, data.error, true);
     else refreshGrid(st, false);
   });
+}
+
+function catChip(st, label, path, title) {
+  const btn = document.createElement("button");
+  btn.className = "tpe-tab";
+  btn.textContent = label;
+  btn.title = title || "";
+  const same = path.length === st.path.length
+    && path.every((seg, i) => String(seg) === String(st.path[i]));
+  if (same) btn.classList.add("tpe-active");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    st.path = path.slice();
+    renderCats(st);
+    refreshGrid(st, false);
+  });
+  return btn;
+}
+
+function renderCats(st) {
+  const box = st.catsEl;
+  box.innerHTML = "";
+
+  // 第一行：全部 + 各大类
+  const row1 = document.createElement("div");
+  row1.className = "tpe-catrow";
+  row1.appendChild(catChip(st, "全部", [], "不限分类"));
+  for (const node of st.tree) {
+    row1.appendChild(catChip(st, node.name, [node.id], `${node.count.toLocaleString()} 个标签`));
+  }
+  box.appendChild(row1);
+
+  // 后续行：沿当前路径逐级展开子类；没有子类就不出这一行
+  let nodes = st.tree;
+  for (let depth = 0; depth < st.path.length; depth++) {
+    const cur = nodes.find((n) => String(n.id) === String(st.path[depth]));
+    if (!cur) break;
+    const kids = cur.children || [];
+    if (!kids.length) break;
+    const prefix = st.path.slice(0, depth + 1);
+    const row = document.createElement("div");
+    row.className = "tpe-catrow";
+    row.appendChild(catChip(st, "全部", prefix, `不限小类 · ${cur.count.toLocaleString()} 个标签`));
+    for (const kid of kids) {
+      row.appendChild(catChip(st, kid.name, prefix.concat(kid.id), `${kid.count.toLocaleString()} 个标签`));
+    }
+    box.appendChild(row);
+    nodes = kids;
+  }
+}
+
+/** 当前分类的中文路径，用于状态栏 */
+function pathLabel(st) {
+  if (!st.path.length) return "";
+  if (st.path.length === 1 && st.path[0] === "fav") return "推荐";
+  return st.path.join(" / ");
 }
 
 function setStatus(st, text, isError = false) {
@@ -859,9 +909,10 @@ function setStatus(st, text, isError = false) {
 }
 
 async function refreshGrid(st, append) {
-  // 在精选分类里搜关键词没意义（一共才百来条），自动切到全部标签搜
+  // 搜索时忽略分类：分类栏是「浏览」用的，搜索是「找某个具体标签」——
+  // 后者加了范围限制反而找不到（比如在「服饰」下搜 long_hair）。
   const searching = !!st.query.trim();
-  const cat = searching && CURATED.has(st.tab) ? "all" : st.tab;
+  const cat = searching || !st.path.length ? "all" : st.path.join("/");
 
   st.fetching?.abort();
   const ctrl = new AbortController();
@@ -881,9 +932,10 @@ async function refreshGrid(st, append) {
     renderGrid(st);
     if (data.error) setStatus(st, data.error, true);
     else {
+      const scope = searching ? `搜「${st.query.trim()}」` : pathLabel(st);
       setStatus(
         st,
-        `已显示 ${st.items.length}${st.hasMore ? "+" : ""} 条${searching ? ` · 搜「${st.query.trim()}」` : ""}`,
+        `已显示 ${st.items.length}${st.hasMore ? "+" : ""} 条${scope ? ` · ${scope}` : ""}`,
       );
     }
   } catch (e) {

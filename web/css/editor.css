@@ -327,22 +327,50 @@
   white-space: nowrap;
 }
 
-.tpe-tabs {
+/* 分类栏：一行一级。第一行是大类，选中后逐级往下出小类 / 细类。
+   大类有 20 多个，胶囊做小一点，一行能多放几个；整块最多占 4 行高度，
+   再多的行内部滚动，免得把下面的网格挤没了。 */
+.tpe-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: none;
+  max-height: 112px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.tpe-catrow {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  flex: none;
+  gap: 4px;
+  align-items: center;
 }
 
 .tpe-tab {
-  height: 20px;
-  padding: 0 9px;
+  height: 19px;
+  padding: 0 7px;
   border: 1px solid var(--tpe-line);
   border-radius: 10px;
   background: transparent;
   color: var(--tpe-fg);
   font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
+  flex: none;
+}
+
+/* 二级往下视觉上从属一级：更小更淡一点，一眼能看出层级 */
+.tpe-cats .tpe-catrow + .tpe-catrow .tpe-tab {
+  height: 18px;
+  font-size: 10.5px;
+  opacity: 0.88;
+}
+
+.tpe-tab:hover {
+  border-color: var(--tpe-accent);
 }
 
 .tpe-tab.tpe-active {
@@ -350,6 +378,7 @@
   background: var(--tpe-accent);
   color: #fff;
   font-weight: 500;
+  opacity: 1;
 }
 
 .tpe-grid {
