@@ -34,8 +34,14 @@ hair，``hair_bow`` 的中心是 bow），所以匹配按「整体名 → 末尾
 
 它们不是「在描述那个词」，而是「名字恰好含那个词」。
 
+上面 10 步只算到**二级**（L1 + L2）。二级桶可能仍然太粗 —— 「服饰 / 裤装」
+里同时有 shorts / pants / jeans，想找牛仔裤要翻 241 条。所以再补一张
+``DEEP_RULES``（按父路径给关键词）切第三级：服饰 → 裤装 → 短裤 / 牛仔裤 / 长裤。
+没有规则或没命中的桶**保持两级**，不强行造「其它」，避免到处冒出空桶。
+
 实测覆盖（121,078 条）：未归类 7.53%，按使用热度加权仅 2.82%，且
-使用量 >= 10 万的热门 tag 100% 归类。
+使用量 >= 10 万的热门 tag 100% 归类。分类树共 1,626 个节点
+（24 个一级 / 154 个二级 / 1,448 个三级；DEEP_RULES 覆盖 23 个二级桶）。
 
 本模块不依赖 ComfyUI，可单独跑单测。
 """
@@ -2160,6 +2166,210 @@ for _k in _SUFFIX_ALSO:
 
 
 # ---------------------------------------------------------------------------
+# 第三级：把已经分好的二级桶再往下切一刀
+# ---------------------------------------------------------------------------
+# 二级桶本身可能仍然太粗 —— 典型的「服饰/裤装」里有 shorts 也有 pants 也有 jeans，
+# 用户想找牛仔裤却要翻 241 条。这张表按父路径给出「关键词 → 三级桶」，命中即返回；
+# 全部不命中则保持原样（**不会**强行造出「其它」，避免到处冒出无意义的空桶）。
+#
+# 关键词两种写法：
+#   单 token（"shorts"）   → 按词元匹配，black_shorts / short_shorts 都命中
+#   多 token（"ice_cream"）→ 按名字匹配，x_ice_cream / ice_cream 都命中
+DEEP_RULES = {
+    ("服饰", "裤装"): (
+        (("shorts", "hot_pants", "buruma"), "短裤"),
+        # 只认 "jeans"：写 "denim" 会把 denim_overalls（牛仔背带裤）拉进来，
+        # 它是 overalls（长款背带裤）而不是牛仔裤，交给下面 "overalls" 归长裤。
+        # denim_shorts 不是问题 —— 它先被上面的 "shorts" 命中。
+        (("jeans",), "牛仔裤"),
+        (("pants", "trousers", "leggings", "overalls", "bloomers"), "长裤"),
+    ),
+    ("服饰", "鞋袜"): (
+        # 顺序敏感，三条「裸足/无鞋袜」的判定必须排在对应的通用词元之前：
+        #   barefoot_sandals 是「看起来像赤足的凉鞋」，属于鞋不是赤足
+        #   no_socks / no_shoes 里含 socks / shoes 词元，会被袜子/鞋子先吃掉
+        (("barefoot_sandals",), "鞋子"),
+        (("barefoot", "no_shoes", "no_socks"), "赤足状态"),
+        (("socks", "thighhighs", "pantyhose", "kneehighs", "zettai_ryouiki",
+          "stockings", "tabi", "legwear"), "袜子"),
+        (("boots",), "靴子"),
+        (("high_heels", "heels", "stilettos", "pumps"), "高跟鞋"),
+        (("shoes", "footwear", "sneakers", "sandals", "loafers", "slippers",
+          "geta", "mary_janes"), "鞋子"),
+    ),
+    ("服饰", "上衣"): (
+        (("sleeves", "sleeve"), "袖子"),
+        (("shirt", "blouse"), "衬衫"),
+        (("sweater", "hoodie", "cardigan", "sweatshirt"), "毛衣卫衣"),
+        (("vest", "tank_top"), "背心"),
+        (("crop_top", "midriff"), "露脐装"),
+        (("sleeveless", "strapless", "off_shoulder", "camisole", "tube_top"), "无袖露肩"),
+    ),
+    ("服饰", "裙装"): (
+        (("dress",), "连衣裙"),
+        (("miniskirt", "microskirt"), "短裙"),
+        (("skirt",), "半身裙"),
+    ),
+    ("服饰", "内衣"): (
+        (("panties", "thong", "highleg", "briefs"), "内裤"),
+        (("bra",), "文胸"),
+        (("corset", "garter_belt", "sarashi", "girdle"), "束腰吊袜"),
+        (("underwear", "lingerie"), "内衣套装"),
+    ),
+    ("服饰", "外套"): (
+        (("jacket", "blazer"), "夹克"),
+        (("coat",), "大衣"),
+        (("cape", "capelet", "cloak", "shawl", "poncho"), "披风斗篷"),
+        (("suit",), "西服套装"),
+    ),
+    ("服饰", "配饰"): (
+        (("hair_ornament", "hair_bow", "hairband", "hairclip", "hair_flower",
+          "hair_ribbon", "hair_scrunchy", "hair_bobbles", "hair_tubes",
+          "hairpin", "hair_stick"), "发饰"),
+        (("glasses", "sunglasses", "eyewear", "monocle", "goggles"), "眼镜"),
+        (("gloves",), "手套"),
+        (("hat", "cap", "helmet", "beret", "headwear"), "帽子"),
+        (("earrings", "jewelry", "necklace", "bracelet", "ring", "pendant",
+          "brooch", "tiara"), "首饰"),
+        (("choker", "scarf", "sailor_collar", "neckerchief", "neckwear"), "颈饰"),
+        (("bow", "ribbon", "bowtie", "necktie", "ascot"), "缎带领结"),
+        (("belt",), "腰带"),
+        (("frills", "frilled", "lace", "ruffles"), "荷叶边蕾丝"),
+    ),
+    ("服饰", "制服"): (
+        (("serafuku", "sailor_dress", "sailor_hat"), "水手服"),
+        (("maid", "enmaided"), "女仆装"),
+        (("school_uniform", "gym_uniform", "winter_uniform", "summer_uniform",
+          "tracen_school_uniform", "blazer_uniform"), "校服"),
+        (("military", "military_uniform"), "军装"),
+        (("playboy_bunny",), "兔女郎"),
+        (("nun", "nun_outfit"), "修女服"),
+    ),
+    ("服饰", "传统服饰"): (
+        (("kimono", "yukata", "obi", "haori", "hakama", "japanese_clothes",
+          "miko"), "和服系"),
+        (("chinese_clothes", "qipao", "hanfu", "cheongsam", "china_dress"), "中式"),
+    ),
+    ("服饰", "泳装"): (
+        (("bikini",), "比基尼"),
+        (("one-piece_swimsuit", "school_swimsuit", "competition_swimsuit",
+          "swimsuit"), "连体泳衣"),
+    ),
+    ("服饰", "图案"): (
+        (("polka_dot", "polka_dots"), "波点"),
+        (("striped", "stripes"), "条纹"),
+        (("plaid", "checkered", "argyle", "gingham"), "格纹"),
+        (("camouflage",), "迷彩"),
+        (("print", "floral"), "印花"),
+    ),
+    ("道具物件", "武器"): (
+        (("sword", "katana", "knife", "dagger", "blade", "rapier", "machete",
+          "scabbard", "sheath"), "刀剑"),
+        (("gun", "rifle", "handgun", "assault_rifle", "pistol", "shotgun",
+          "sniper", "revolver"), "枪械"),
+        (("spear", "polearm", "staff", "naginata", "halberd", "lance"), "长杆兵器"),
+        (("bow_(weapon)", "crossbow", "arrow_(projectile)"), "弓弩"),
+        (("shield", "helm", "armor_", "gauntlet"), "盾甲"),
+        (("wand", "turret", "grenade", "bomb", "missile", "cannon"), "其它武器"),
+    ),
+    ("道具物件", "食物"): (
+        (("fruit", "apple", "strawberry", "banana", "peach", "grape", "cherry",
+          "watermelon", "lemon", "mango", "pineapple", "orange", "berry",
+          "melon"), "水果"),
+        (("ice_cream", "cake", "candy", "lollipop", "chocolate", "cookie",
+          "donut", "macaron", "pudding", "pie", "sundae", "popsicle"), "甜点"),
+        (("drink", "tea", "coffee", "alcohol", "juice", "soda", "beer", "wine",
+          "cocktail", "milk"), "饮品"),
+        (("bread", "rice", "noodles", "pasta", "burger", "pizza", "meat",
+          "sushi", "sandwich", "curry"), "主食"),
+        (("vegetable", "tomato", "carrot", "onion", "potato", "corn",
+          "mushroom"), "蔬菜"),
+    ),
+    ("动植物", "动物"): (
+        (("cat", "kitten", "neko"), "猫"),
+        (("dog", "puppy", "puppies"), "狗"),
+        (("rabbit", "bunny"), "兔"),
+        (("bird", "chick", "eagle", "owl", "crow", "swan", "penguin", "duck",
+          "sparrow"), "鸟"),
+        (("fish", "shark", "whale", "dolphin", "jellyfish", "octopus", "squid",
+          "crab"), "鱼与水族"),
+        (("bug", "butterfly", "bee", "spider", "moth", "beetle", "ant", "worm"), "虫"),
+        (("stuffed_animal", "teddy_bear", "plush"), "玩偶"),
+        (("dragon", "monster", "slime", "demon", "fairy", "unicorn", "phoenix",
+          "pokemon_(creature)"), "幻想生物"),
+    ),
+    ("动植物", "植物"): (
+        (("flower", "rose", "blossom", "cherry_blossoms", "petals", "tulip",
+          "sunflower", "lily", "lotus", "daisy", "lavender"), "花"),
+        (("tree", "leaf", "leaves", "branch", "palm", "trunk", "root"), "树木枝叶"),
+        (("grass", "plant", "moss", "cactus", "vine", "fern", "bamboo"), "草本植株"),
+    ),
+    ("动作", "手部动作"): (
+        (("holding", "carrying"), "持物"),
+        (("thumbs_up", "v_sign", "finger_gun", "ok_sign", "heart_hands",
+          "peace_sign", "salute", "double_v"), "手势符号"),
+        (("pointing", "reaching", "waving", "beckoning"), "指向挥动"),
+    ),
+    ("文字符号", "符号"): (
+        (("censored", "mosaic_censoring", "bar_censor", "uncensored",
+          "convenient_censoring", "heart_censor"), "打码遮挡"),
+        (("heart", "spoken_heart"), "心形"),
+        (("star_(symbol)", "star", "crescent", "musical_note", "eighth_note",
+          "cross", "arrow_(symbol)", "infinity"), "几何符号"),
+    ),
+    ("面部", "脸部"): (
+        (("makeup", "lipstick", "eyeshadow", "blush", "eyeliner"), "妆容"),
+        (("facial_hair", "beard", "mustache"), "胡须"),
+        (("mole", "freckles", "beauty_mark"), "痣与雀斑"),
+        (("facial_mark", "scar_on_face", "forehead_mark", "bandaid"), "面部印痕"),
+        (("eyewear_on_head", "goggles_on_head", "eyepatch"), "眼部佩戴"),
+        (("faceless", "shaded_face"), "面部遮挡"),
+    ),
+    ("身体", "身体特征"): (
+        (("animal_ears", "pointy_ears", "cat_ears", "rabbit_ears", "fox_ears",
+          "horse_ears", "wolf_ears", "ears", "ear_fluff"), "兽耳"),
+        (("tail",), "尾巴"),
+        (("horns", "horn", "demon_horns"), "角"),
+        (("wings", "feathers", "angel_wings", "demon_wings"), "翼与羽"),
+        (("halo",), "光环"),
+        (("piercing",), "穿刺"),
+        (("tattoo", "scar", "birthmark"), "疤痕纹身"),
+    ),
+    ("身体", "胸部"): (
+        (("nipples", "nipple", "areola"), "乳首"),
+        (("cleavage", "sideboob", "underboob", "between_breasts"), "乳沟侧面"),
+        (("breasts", "pectorals", "flat_chest"), "大小"),
+    ),
+}
+
+
+def _deep_hit(low, tokens, key):
+    """三级关键词命中判定。单 token 按词元匹配，多 token 按名字匹配。"""
+    if key in tokens:
+        return True
+    if "_" in key or "(" in key:
+        return (low == key or low.endswith("_" + key)
+                or ("_" + key + "_") in low)
+    return False
+
+
+def _deepen(name, path):
+    """给 (L1, L2) 再下一级。没有规则、没命中就原样返回。"""
+    if len(path) != 2:
+        return path
+    rules = DEEP_RULES.get((path[0], path[1]))
+    if not rules:
+        return path
+    low = name.strip().lower()
+    tokens, _suf = split_name(name)
+    for keys, l3 in rules:
+        for k in keys:
+            if _deep_hit(low, tokens, k):
+                return (path[0], path[1], l3)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # 分类主函数
 # ---------------------------------------------------------------------------
 
@@ -2209,12 +2419,8 @@ def candidates(tokens):
     return out
 
 
-def classify(name, cat, cat3=None, count=0):
-    """返回 (L1, L2[, L3])。
-
-    cat3  已知作品名集合，用于把角色归到所属作品。
-    count 用于画师 / 作品这类没有语义信息的类别，按使用热度分档。
-    """
+def _classify_base(name, cat, cat3=None, count=0):
+    """基础分类：返回 (L1, L2)。三级由 classify 统一下钻。"""
     tokens, suffix = split_name(name)
     low = name.strip().lower()
 
@@ -2299,6 +2505,18 @@ def classify(name, cat, cat3=None, count=0):
     if cat == 5:
         return ("元数据", "未细分")
     return ("其它", "常用杂项" if count >= 100 else "长尾杂项")
+
+
+def classify(name, cat, cat3=None, count=0):
+    """返回 (L1, L2[, L3])。
+
+    cat3  已知作品名集合，用于把角色归到所属作品。
+    count 用于画师 / 作品这类没有语义信息的类别，按使用热度分档。
+
+    两级分类由 _classify_base 完成（规则多、分支重），第三级由 _deepen 按
+    父路径补一次 —— 拆开是为了让「加一层细类」不必改动基础规则表。
+    """
+    return _deepen(name, _classify_base(name, cat, cat3, count))
 
 
 # 热度档的展示顺序：由热到冷，与「条数降序」相反（长尾条数最多但没有浏览价值）
