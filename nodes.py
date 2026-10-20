@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """ComfyUI-TagPromptEditor · 节点与标签库 HTTP 接口
 
-节点本身是一个**极简透传**：``STRING -> STRING``。
+节点几乎是一个透传：``STRING -> STRING``，唯一的处理是把前端写进文本的
+禁用注释（``#tag``）在输出前剥掉，保证禁用标签不进编码器。
 所有编辑逻辑（标签块、权重、拖拽排序、预设选择器）都在前端 ``web/`` 里，
 编辑完成后序列化回这个 ``text`` widget —— 于是工作流保存 / 复制粘贴 / 撤销
 全部复用 ComfyUI 原生机制，后端不需要任何额外状态。
@@ -21,6 +22,44 @@ except Exception:  # 脱离 ComfyUI 环境导入时（比如跑单测）也不�
     PromptServer = None
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def strip_disabled(text):
+    """剥掉禁用注释片段（`#tag` / `#(tag:1.2)`），其余原样返回。
+
+    前端把「禁用」的标签以 `#` 前缀留在文本里持久化（工作流保存 / 排队回填
+    都靠文本），这里在输出给编码器前把它们去掉 —— CLIP 永远看不到禁用标签。
+    切分与前端 splitTopLevel 一致：按逗号/换行，圆括号内的分隔符不拆。
+    只有出现禁用片段时才重建文本，纯透传路径零改动。
+    """
+    if not text or "#" not in text:
+        return text
+    out = []
+    cur = []
+    depth = 0
+    seen_disabled = False
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if (ch == "," or ch == "\n") and depth == 0:
+            chunk = "".join(cur).strip()
+            if chunk.startswith("#"):
+                seen_disabled = True
+            elif chunk:
+                out.append(chunk)
+            cur = []
+            continue
+        cur.append(ch)
+    chunk = "".join(cur).strip()
+    if chunk.startswith("#"):
+        seen_disabled = True
+    elif chunk:
+        out.append(chunk)
+    if not seen_disabled:
+        return text
+    return ", ".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -44,19 +83,21 @@ class TagPromptEditor:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
-    OUTPUT_TOOLTIPS = ("逗号分隔的提示词，带 (tag:权重) 语法，直接接 CLIPTextEncode",)
+    OUTPUT_TOOLTIPS = ("逗号分隔的提示词，带 (tag:权重) 语法，直接接 CLIPTextEncode。以 # 开头的片段是禁用的标签，输出前会被剥掉",)
     FUNCTION = "run"
     CATEGORY = "utils/prompt"
     DESCRIPTION = (
         "WebUI 风格的标签块提示词编辑器。\n"
         "上方文本域是原始提示词，下方标签块区域可直接删除标签、"
         "调整权重、拖拽排序，最下方是带中文说明的全量 Danbooru 标签选择器。\n"
+        "双击标签块可禁用/启用：禁用的标签以 # 前缀留在文本里（不会丢失），"
+        "输出给编码器前会被自动剥掉。\n"
         "输出 STRING，接 CLIPTextEncode 的 text 输入。"
     )
     SEARCH_ALIASES = ["tag editor", "prompt editor", "提示词编辑器", "标签", "tags", "webui"]
 
     def run(self, text):
-        return (text,)
+        return (strip_disabled(text),)
 
 
 NODE_CLASS_MAPPINGS = {

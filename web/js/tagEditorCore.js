@@ -65,28 +65,39 @@ const PAREN_RE = /^\((.*)\)$/s;
 
 /**
  * 把提示词文本解析成标签数组。
+ * `#tag` / `#(tag:1.2)` 是禁用语法：解析成 on=false 的标签块。
+ * 禁用标签必须留在文本里（工作流保存 / 排队回填都靠它持久化），
+ * 由节点 Python 端在输出给编码器前剥掉 —— 所以 CLIP 永远看不到它们。
  * @returns {{t:string,w:number,on:boolean,bracket?:boolean}[]}
  */
 export function parsePrompt(text) {
   const tags = [];
   for (const chunk of splitTopLevel(text)) {
-    const raw = chunk.trim();
+    let raw = chunk.trim();
     if (!raw) continue;
+
+    // 禁用注释前缀。tag 名不含 #（danbooru 只有 [a-z0-9_()'-]），不会误伤。
+    let off = false;
+    if (raw.startsWith("#")) {
+      raw = raw.slice(1).trim();
+      if (!raw) continue;   // 纯 "#" 的片段（用户手滑）直接丢弃
+      off = true;
+    }
 
     const m = raw.match(WEIGHTED_RE);
     if (m && balanced(m[1])) {
-      tags.push({ t: m[1].trim(), w: clampWeight(m[2]), on: true });
+      tags.push({ t: m[1].trim(), w: clampWeight(m[2]), on: !off });
       continue;
     }
 
     const p = raw.match(PAREN_RE);
     if (p && balanced(p[1])) {
       // 归一化：(tag) 直接展开成显式权重 1.1，语义完全一致
-      tags.push({ t: p[1].trim(), w: 1.1, on: true });
+      tags.push({ t: p[1].trim(), w: 1.1, on: !off });
       continue;
     }
 
-    const tag = { t: raw, w: 1, on: true };
+    const tag = { t: raw, w: 1, on: !off };
     // ComfyUI 不支持方括号降权，标出来让 UI 提示用户
     if (/^\[.+\]$/.test(raw)) tag.bracket = true;
     tags.push(tag);
@@ -94,11 +105,18 @@ export function parsePrompt(text) {
   return tags.filter((x) => x.t);
 }
 
-/** 标签数组 -> 提示词文本。权重为 1 时输出裸标签，避免满屏无用括号。 */
+/**
+ * 标签数组 -> 提示词文本。权重为 1 时输出裸标签，避免满屏无用括号。
+ * 禁用的标签写成 `#tag`（注释语法）：留在文本里才能跟着工作流持久化，
+ * 节点 Python 端输出前会剥掉，不进编码器。
+ */
 export function serializeTags(tags) {
   return (tags || [])
-    .filter((x) => x.on && x.t)
-    .map((x) => (Math.abs(x.w - 1) < 1e-6 ? x.t : `(${x.t}:${formatWeight(x.w)})`))
+    .filter((x) => x.t)
+    .map((x) => {
+      const body = Math.abs(x.w - 1) < 1e-6 ? x.t : `(${x.t}:${formatWeight(x.w)})`;
+      return x.on ? body : `#${body}`;
+    })
     .join(", ");
 }
 
